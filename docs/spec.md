@@ -1,6 +1,13 @@
 # Spec: Hindcast — from my sessions to a tested fix
 
-Status: draft 4. Phase 0 (the Harbor trial) is done; its results are in 2.1. No application code is written yet.
+Status: draft 5. Phase 0 (the Harbor trial) is done; its results are in 2.1. No application code is written yet.
+
+Changes from draft 4 (research on GitHub issues #3, #4 and #6; sources in Appendix B):
+- New 4.4: a long session is split into reviewed **task candidates** with evidence and dependencies before anything is distilled or benchmarked (#6). New schema A6.
+- 6.1 and 6.4 rewritten against RewardKit 0.2.4 and Harbor 0.25.0 (#3). The check, the metrics and the judge are all RewardKit dimensions, because RewardKit overwrites `reward.json`. The verifier runs in separate mode. Regrading is `harbor job regrade`.
+- 6.6: a `dataset.toml` manifest per dataset with task digests, a task version scheme, canary strings, and a secret scan that a pre-commit hook alone cannot enforce (#4).
+
+Changes from draft 3 to draft 4, kept for reference:
 
 **Name.** *Hindcast* is a forecasting term: you test a model against past data whose outcome you already know. Here, past agent sessions are rebuilt as tasks to check whether a fix would have changed what happened. The CLI is `hindcast`. The bare name is taken on PyPI and npm by an unrelated 0.0.1 package, so the package is published as `hindcast-ai`. The working name *Hindsight* was dropped because Vectorize's *Hindsight* is an agent-memory product with an MCP server (about 60k GitHub stars), which is the same thing section 11 defers.
 
@@ -37,8 +44,11 @@ flowchart LR
   EP --> LAB[Label friction]
   LAB --> REV[You review]
   REV --> GRP[Group]
+  DB --> TC[Task candidates, reviewed]
   GRP --> FIX[Distill fix: skill / rule / hook]
+  TC --> FIX
   GRP --> TK[Build Harbor tasks]
+  TC --> TK
   FIX --> RUN
   TK --> RUN[harbor run: baseline / baseline + fix]
   RUN -- ATIF trajectories + rewards --> LD
@@ -358,6 +368,75 @@ Each label stores the model, prompt version, condenser version, input hash and c
 
 **Review screen:** the label beside its evidence steps, keyboard confirm and reject, and multi-select. Two actions work on a selection: **Group** (5.1) and **Create benchmark dataset** (6).
 
+### 4.4 Task candidates (GitHub issue #6)
+
+An episode is the unit for finding friction. It is not a task boundary. A long session holds several objectives, interruptions, incidental repairs and corrections to earlier work, for example: add authentication → repair the Docker setup → resume authentication → fix a migration → add password reset → correct the earlier authentication. Splitting on topic changes cuts authentication into pieces. Merging every authentication message can drop the Docker repair it needs, or leak the final solution into the instruction.
+
+SWE-bench shows what goes wrong without this step. One task built from a pull request that fixed three issues described one issue, while its tests checked all three (B.3). So a session goes through one more stage before a fix is distilled from it or a task is built from it:
+
+```
+session (ATIF) → task candidates (proposed) → you review → ready candidates → distill (5.2) / build task (6.1)
+```
+
+**Scope of the first version.**
+- One imported trajectory at a time. Its subagent trajectories are linked through ATIF `subagent_trajectory_ref` (B.3) and their steps can be cited as evidence.
+- A manual **Extract tasks** action on the session view. It calls `run_structured` (7) with schema A6. Nothing runs automatically on ingest.
+- No merging across sessions, no live routing, and no claim that a session log alone rebuilds the old filesystem state.
+
+**A candidate** (schema A6, stored in `task_candidates` and `candidate_revisions`) has:
+- **Identity and provenance:** a stable `candidate_id`; a `revision` that increases on every save; the source `trajectory_id`; the adapter version; the model, prompt version and condenser version of the extraction; and a review status.
+- **Title, objective and acceptance criteria.** Every criterion cites the steps it comes from.
+- **Evidence spans.** Each span is a list of `(trajectory_id, step_id)` ranges, so the evidence can be noncontiguous: a task can stop for another task and resume later. Each span has one role:
+
+  | Role | Exported to the solver's `instruction.md`? |
+  |---|---|
+  | `request` | yes |
+  | `requirement` (a clarification that adds or changes what is wanted) | yes |
+  | `attempt` (what the agent tried) | no |
+  | `correction` | no; its requirement part is copied out as a separate `requirement` span |
+  | `outcome` | no |
+  | `solution_hint` (how to do it, from you or from the agent's final fix) | no, evaluation only |
+
+  A message that both clarifies a requirement and hints at the solution is split into two spans. Only the requirement reaches the solver. R2E-Gym and SWE-smith write the task text from the solution diff (B.3). Hindcast does the opposite: the instruction is built only from `request` and `requirement` spans.
+- **Starting state.** A list of facts, each `known` or `unknown`, with evidence. A base commit is recorded only when the trajectory records one (`git_commit` in 3.2). A guessed commit is never marked known.
+- **Dependencies** on other candidates of the same session. Each edge has a reason and evidence. Running order is not a dependency, and two tasks touching the same file is not one either. A setup repair becomes a prerequisite only when the later task needed it, with evidence that it did.
+- **Outcome evidence and open questions.** An agent saying "done" is a claim, not proof of success (friction type `false_completion`, 4.3).
+- **Readiness:** `needs_review`, `blocked` (with reasons such as unknown starting state, an unready prerequisite, or no request span) or `ready_for_task_build`. Ready means a task may be built. Whether the task is admitted is still decided by the nop/oracle/install checks in 6.1.
+
+**Where the links live.** ATIF has no field that links one step to another; it has only `tool_call_id`→`source_call_id`, subagent refs and `continued_trajectory_ref` (B.3). Candidates and their edges therefore live in our own tables and point at `step_id`s. On ATIF export they go nowhere, so the exported trajectory stays valid.
+
+**Code checks on an extraction** (beyond the schema):
+- Every cited step exists in the source trajectory or one of its linked subagents.
+- No candidate depends on itself, and the dependency graph has no cycle.
+- Every criterion and every edge has at least one evidence span.
+- No `solution_hint` span overlaps a `request` or `requirement` span.
+
+A failed check rejects the proposal and is shown, not silently repaired. Uncertain boundaries are listed under `open_questions` for review.
+
+**Review screen.** Candidates appear beside the session timeline, and their spans are highlighted. You can:
+- edit the objective and the criteria
+- move a span to another candidate or change its role
+- merge or split candidates
+- edit dependency edges
+- reject a candidate as a standalone task but keep its evidence for the tasks that depend on it
+
+A merge or split keeps all evidence links and sends the affected candidates, and the candidates that depend on them, back to `needs_review`. A second **Extract tasks** run creates a new proposal set beside the reviewed one and never overwrites your edits. Each saved edit is a new revision.
+
+**Consumers.**
+- **Distill (5.2)** can take evidence from reviewed candidates as well as from friction groups.
+- **Build task (6.1)** accepts only `ready_for_task_build` candidates. It records `candidate_id` and `revision` in `task.toml` `[metadata]`, so a task in the bench repo (6.6) traces back to the exact reviewed revision.
+
+**Tests.** Small redacted fixtures with hand-labelled expected candidates, one per case:
+1. An interrupted and resumed objective becomes one candidate with noncontiguous spans.
+2. Two independent requests become two candidates with no edge between them.
+3. A setup repair that a later task needs becomes a prerequisite. An unrelated repair does not.
+4. A message with both a requirement and a hint keeps the requirement in the instruction and leaves the hint out.
+5. A candidate with no evidence of its starting state is `blocked`, with a reason you can act on.
+6. A bad step reference or a cycle is rejected.
+7. Restarts, edits, merges, splits and re-extraction keep the lineage.
+
+**Done when:** the fixtures pass, and three real redacted long sessions go through extract → review and correct → select → task-build input that you can understand without reading the whole session. For each one, record the missing requirements, wrong edges and leaked hints that you corrected. Three sessions say nothing about general segmentation accuracy, and the result must not claim it.
+
 ## 5. Distill a fix
 
 ### 5.1 Group
@@ -371,7 +450,7 @@ You can merge groups, split them, or group by hand. Groups are ranked by session
 
 ### 5.2 Draft
 
-`claude -p` gets the group's evidence. For each episode that is the intent, the friction items with their evidence steps, the reaction, and the steps listed in `resolution_step_ids`. It returns schema A3, which includes the **fix type**:
+`claude -p` gets the group's evidence. For each episode that is the intent, the friction items with their evidence steps, the reaction, and the steps listed in `resolution_step_ids`. You can also add reviewed task candidates (4.4); their `attempt`, `correction`, `outcome` and `solution_hint` spans are the most useful evidence for a fix. It returns schema A3, which includes the **fix type**:
 
 | Type | When | Artifact |
 |---|---|---|
@@ -414,33 +493,46 @@ Where a fix came from (sessions, group) is stored in the database, never in the 
 ```
 <dataset>/<task-name>/
   task.toml            [task] name = "hindcast/<task-name>"  (org/name is required)
-                       [agent] timeout_sec; [verifier] timeout_sec; [environment] cpus, memory_mb
-                       [metadata] source_trajectory_id, source_turn_range, kind, base_commit,
-                                  repo_tar_sha256, rubric_version, hindcast_version
-  instruction.md       the prompt
+                       [agent] timeout_sec; [environment] cpus, memory_mb
+                       [verifier] timeout_sec; environment_mode = "separate"
+                                  artifacts = ["/app", "/logs/agent/trajectory.json"]
+                       [verifier.env] CLAUDE_CODE_OAUTH_TOKEN = "${CLAUDE_CODE_OAUTH_TOKEN}",
+                                      REWARDKIT_FORCE_SUBSCRIPTION = "1"
+                       [metadata] source_trajectory_id, candidate_id, candidate_revision,
+                                  kind, base_commit, repo_tar_sha256, rubric_version,
+                                  task_version, hindcast_version
+  instruction.md       the prompt, with the canary line (6.6)
   environment/
-    Dockerfile         FROM hindcast-base:<claude-code-version> + project setup
+    Dockerfile         FROM hindcast-base:<claude-code-version>@sha256:… + project setup
     CLAUDE.md          your current instructions for this project (the baseline, see 6.3)
     app/…              reconstructed tasks: the project source, committed
     repo.tar           replay tasks: generated, never committed (6.6)
   tests/
-    test.sh            check command → /logs/verifier/reward.json; diff → /logs/verifier/diff.patch
-    judge/rubric.toml  RewardKit rubric (6.4)
+    test.sh            writes /logs/verifier/diff.patch, then runs RewardKit
+    reward.toml        how the dimensions combine (6.4)
+    check/check.py     the check command, as a RewardKit criterion → dimension `check`
+    metrics/*.py       diff_lines, new_files, new_config_keys → one dimension each
+    judge/judge.toml   [judge] + one binary [[criterion]] per rubric item → dimension `judge`
   solution/solve.sh    a reference solution, so `-a oracle` can prove the check is passable
 ```
 
-- **`instruction.md`** is your first message in the episode, plus later messages that added requirements. `claude -p` drafts it and you edit it. Messages that only corrected the agent are left out, because the correction is what the task tests.
+- **`instruction.md`** is built only from the `request` and `requirement` spans of a reviewed task candidate (4.4). `claude -p` drafts it and you edit it. Corrections and solution hints are left out, because the correction is what the task tests.
 - **`environment/`.**
   - **Base image.** `hindcast-base:<v>` has Node and Claude Code `<v>` preinstalled. The job passes the same version as `agents[].kwargs.version`, so Harbor skips the 3-minute install (2.1).
   - **Replay tasks** copy in `git archive` of the repo at the base commit. Private repos stay on the machine, and nothing is cloned in the container.
   - **Dockerfile.** It is generated from what the repo uses (Python and uv, Node, …) and is editable.
   - **`CLAUDE.md`.** It is copied to `/app/CLAUDE.md` and committed in the image's repo before the agent starts, so it is not part of the diff. It holds your global instructions plus the project's own. It goes in the project and not in the user config, because Harbor sets `CLAUDE_CONFIG_DIR` to the trial's log directory.
-- **`tests/test.sh`.**
-  - It runs an optional check command (tests, build) and writes `{"check": 0|1}` to `/logs/verifier/reward.json`. The file holds numbers only, with one key per metric.
-  - It then runs `git add -A && git diff --cached HEAD > /logs/verifier/diff.patch`, so new files are included.
-  - The diff comes back at `<trial>/verifier/diff.patch`, as in 2.1. Harbor collects artifacts *before* the verifier runs, so a file that `test.sh` writes is not a Harbor artifact.
-  - For preference themes it also writes measurable metrics where they apply: `diff_lines`, `new_files`, `new_config_keys`.
-- **Rubric.** It is drafted from the intent and the friction as items such as "must do X", "must not do Y", "must follow instruction Z" (schema A4). It is stored in the database and exported to `tests/judge/rubric.toml`. You edit it. Items describe the result or the behavior, never the fix: "used the skill" is not an item.
+- **Verifier mode: separate.** The verifier runs in a fresh copy of the task environment, not in the agent's container. Only declared `artifacts` are copied in, at their original paths, and `/logs/agent/` is copied only when declared (B.1). So `task.toml` declares `/app`, which holds the agent's changes, and `/logs/agent/trajectory.json`. Separate mode is what makes a rubric edit regradable without rerunning the agent (6.4). It is also the default of `harbor init --task` in 0.25.0. Whether copying `/app` keeps its `.git` directory is **unverified** and is part of the spike (6.4).
+- **`tests/test.sh`** has two lines:
+  1. `cd /app && git add -A && git diff --cached HEAD > /logs/verifier/diff.patch`, so new files are included. The diff comes back at `<trial>/verifier/diff.patch`, as in 2.1.
+  2. `uvx --python '>=3.12,<3.14' --from 'harbor-rewardkit==0.2.*' rewardkit /tests`. The `--python` range is the one in Harbor's tutorial (B.1).
+- **Everything is a RewardKit dimension.** RewardKit *overwrites* `/logs/verifier/reward.json`; it does not add to the file (B.1). So `test.sh` writes no scores itself:
+  - **`check`.** `tests/check/check.py` wraps the project's check command (tests, build) in RewardKit's built-in `command_succeeds` criterion.
+  - **Metrics.** Each measurable metric that applies to a preference theme (`diff_lines`, `new_files`, `new_config_keys`) is a criterion in `tests/metrics/` that reads `diff.patch`.
+  - **`judge`.** `tests/judge/judge.toml` holds the rubric.
+
+  `reward.json` then has one number per dimension, keyed by directory name, plus the aggregate `reward`. Per-criterion results, judge reasoning and sample agreement go to `reward-details.json` beside it.
+- **Rubric.** It is drafted from the task candidate's criteria and from the friction, as items such as "must do X", "must not do Y", "must follow instruction Z" (schema A4). It is stored in the database and exported to `tests/judge/judge.toml`, one binary `[[criterion]]` per item (6.4). You edit it. Items describe the result or the behavior, never the fix: "used the skill" is not an item.
 
 **Task check, with no agent quota.** Before a task is used:
 1. `harbor run -a nop` must score `check = 0`. This shows the task isn't already solved.
@@ -502,18 +594,36 @@ environment: { type: docker }
 ### 6.4 Grading
 
 Each trial gets:
-1. The **check** result and the measurable metrics, from `reward.json`.
-2. A **rubric score**, by default from **RewardKit** inside Harbor's verifier:
-   - The task builder writes `tests/judge/rubric.toml`: binary criteria, `samples = 3`, `guard = "flag"`.
-   - `test.sh` ends with `uvx --from 'harbor-rewardkit==0.2.*' rewardkit /tests`, which adds `rubric` and one score per item to `reward.json`. Its inputs are `/logs/verifier/diff.patch` and the trajectory.
-   - The judge uses `CLAUDE_CODE_OAUTH_TOKEN` through `[verifier.env]`, with `REWARDKIT_FORCE_SUBSCRIPTION=1`.
+1. The **check** result and the measurable metrics: the `check` and metric dimensions in `reward.json`.
+2. A **rubric score**, by default from **RewardKit** inside Harbor's verifier (checked against RewardKit 0.2.4, released 2026-11-01; B.1):
+   - **Judge file.** RewardKit treats any `*.toml` with a `[judge]` table or `[[criterion]]` entries as a judge. There is no `rubric.toml` convention. The task builder writes `tests/judge/judge.toml`:
+     ```toml
+     [judge]
+     judge = "anthropic/claude-opus-5-5"   # LiteLLM model string; RewardKit's default
+     files = ["/logs/verifier/diff.patch"]
+     atif-trajectory = "/logs/agent/trajectory.json"
+     samples = 3        # median per criterion; agreement 0–1 goes to reward-details.json
+     guard = "flag"     # flags prompt injection aimed at the judge; "penalize" would score it 0
+
+     [[criterion]]
+     id = "r1"
+     description = "The change adds no feature flag or new config key."
+     type = "binary"
+     weight = 3
+     ```
+   - **Binary only.** Each rubric item is one `binary` criterion. Likert, numeric and rubric types exist, but a Likert judge rarely gives 1.0, which all-pass aggregation needs (B.1).
+   - **Inputs.** The judge sees what `files` lists, an optional `reference` file and the ATIF trajectory. It has no diff input of its own, so `test.sh` writes `diff.patch` first. Whether `files` accepts a path outside the workspace (`/app`) is **unverified**; if it does not, `test.sh` writes the diff under `/app/.hindcast/` and leaves it out of the diff itself. RewardKit cuts long trajectories down to fit the context window but keeps every step.
+   - **Auth.** The LLM judge passes `CLAUDE_CODE_OAUTH_TOKEN` to LiteLLM as a bearer token. If `ANTHROPIC_API_KEY` is also set, the API key wins, unless `REWARDKIT_FORCE_SUBSCRIPTION=1` is set. That variable exists in 0.2.4 (`rewardkit/judges.py`, `rewardkit/agents.py`). Both go in `[verifier.env]`, and the runner's `env -i` (6.3) keeps a host `ANTHROPIC_API_KEY` out.
+   - **Other knobs:** `REWARDKIT_JUDGE`, `REWARDKIT_MODEL` and `REWARDKIT_REASONING_EFFORT`, or the matching `rewardkit` flags. The agent judges `claude-code`, `codex` and `fx` can run commands themselves, but several samples of an agent judge must run `isolated` (or with `--yolo`). Hindcast uses the plain LLM judge.
    - The judge never sees the job config, so it cannot know the variant.
-   - After a rubric edit, existing trials are regraded with `harbor run --diff <job>`, which needs `[verifier] environment_mode = "separate"` and the diff declared as an artifact.
+   - **Regrade.** After a rubric edit, `harbor job regrade <job dir> -p <dataset dir>` reruns only the verifiers on the recorded artifacts, so no agent quota is used. It needs separate mode and every input declared as an artifact (6.1). `harbor run --diff <job>` also exists in 0.25.0, but it only previews what a new job would reuse, regrade or rerun.
 
 **Spike first (phase 4, step 1).** Run a one-criterion RewardKit judge on the phase-0 task with `-a oracle` and `-a nop`, which uses no agent quota. Confirm that:
-- `/logs/agent/trajectory.json` is readable inside the verifier
-- subscription auth works there
-- regrade works
+- `/logs/agent/trajectory.json` reaches the separate verifier as a declared artifact, and RewardKit reads it as `atif-trajectory`
+- `/app` arrives with its `.git` directory, so `diff.patch` is correct
+- `files` can name `/logs/verifier/diff.patch`
+- subscription auth works there, and the judge's usage shows no API billing. This includes checking that the `${CLAUDE_CODE_OAUTH_TOKEN}` reference in `[verifier.env]` resolves from the `--env-file`, since the runner starts Harbor with `env -i`
+- `harbor job regrade` works after a criterion is edited
 - a rule added to `/app/CLAUDE.md` is read by the agent
 
 If the trajectory is not readable, the judge grades the diff only. If RewardKit fails, use the **host judge** instead. That is `run_structured` (7) with the instruction, the rubric, the diff and the condensed trajectory, following schema A5. Before the host judge sees the trajectory, the condenser removes:
@@ -524,7 +634,7 @@ If the trajectory is not readable, the judge grades the diff only. If RewardKit 
 
 Either way, the host judge is kept for the agreement sample.
 
-**Rubric score:** the weighted share of applicable items that passed, with `not_applicable` items left out. It is computed in code, never by the judge. A failed `critical` item makes the trial a rubric fail, whatever the score.
+**Rubric score:** the weighted share of applicable items that passed, with `not_applicable` items left out. It is computed in code from the per-criterion results in `reward-details.json` (or from schema A5 for the host judge), never by the judge. RewardKit's own `judge` number is stored but not used as the rubric score. A failed `critical` item makes the trial a rubric fail, whatever the score. RewardKit binary criteria have no `not_applicable` verdict. Items that may not apply are marked `optional = true`; whether that gives "not applicable" semantics is **unverified**.
 
 **Agreement.** A sample of verdicts (5 per run, stratified by variant) is shown to you to confirm. The agreement rate is shown next to the results.
 
@@ -535,7 +645,7 @@ The judge is Claude. That is fine for comparing with and without a fix on one mo
 For each trial the backend:
 - loads `agent/trajectory.json` through the normal loader with `origin = benchmark`
 - stores the rewards, rubric results, tokens, cost (`agent_result.cost_usd`, labeled as an estimate), duration and any `exception_info` from the trial's `result.json`
-- records the bench repo commit and Harbor's `task_checksum`, so every number traces back to the exact task and fix
+- records the bench repo commit, Harbor's `task_checksum`, the task digest from `dataset.toml`, `task_version` and `candidate_id`@`candidate_revision`, so every number traces back to the exact task, fix and reviewed source (6.6, 4.4)
 
 **Was the fix applied?**
 - **Skill:** "invoked" means the trajectory has a `Skill` tool call with `arguments.skill == <name>`, or a skill-injection step naming it. This is Claude Code only. Codex has no Skill tool and reads skills as files.
@@ -561,7 +671,8 @@ Datasets, fixes and job configs live in a separate **private** git repo, `hindca
 
 ```
 hindcast-bench/
-  registry.json              one entry per dataset@version, tasks by path
+  datasets/<dataset>/dataset.toml   manifest: [dataset] name/version/description, one [[tasks]]
+                                    entry per task with its sha256 digest (`harbor sync`)
   datasets/<dataset>/<task>/ task directories (6.1); rule variants as <dataset>+<fix>@<v>/
   datasets/controls/         unrelated tasks (6.3)
   skills/<name>/SKILL.md     exported skills
@@ -571,13 +682,27 @@ hindcast-bench/
   jobs/runs/                 ignored (Harbor output, imported into SQLite)
   base-images/claude-code/Dockerfile
   fixtures/phase0/           the 2.1 trial
+  CANARY                     this repo's canary GUID (below)
+  .gitleaks.toml             scan config and allowlist
   .gitignore                 jobs/runs/, **/repo.tar, **/agent/sessions/, .env*
 ```
 
 - **Committed:** everything needed to rebuild a task, except private repo snapshots.
+- **Manifest, not `registry.json`.** Harbor 0.25.0 has two dataset formats. Its CLI labels `registry.json` "legacy". The current format is a `dataset.toml` per dataset (`harbor init --dataset`), which lists tasks by `org/name` with a `sha256:` content digest, and `harbor sync` recomputes the digests (B.2). The digests give each task a content hash that changes whenever anything in the task changes, so `hindcast` records the digest with every run (6.5) and refuses to compare runs whose task digests differ. Jobs still point at task directories by path (6.3). Whether `harbor run` itself checks the digests is **unverified**; the app does not depend on it.
 - **`repo.tar`:** regenerated by `hindcast bench materialize <task>` with `git archive` from `[metadata] base_commit`, then checked against `repo_tar_sha256`. A clone on another machine can run reconstructed tasks only, which is fine for a personal benchmark.
-- **Versions:** a dataset version is a git tag (`keep-it-simple@v1`). The app commits each change it writes.
-- **Secrets:** they are redacted (3.1) before anything is written, and a pre-commit secret scan (gitleaks) runs in the repo. Nothing is published to Harbor Hub.
+  - `git archive` has no history, on purpose. A repo snapshot that keeps its `.git` history lets the agent read *later* commits, which can hold the solution; LogicStar rebuilt SWE-bench's packfiles to avoid this (B.2). The image commits the archive as a single fresh commit (6.1).
+  - Large snapshots are not stored with Git LFS or DVC. They can be regenerated from the commit, and keeping them in git would copy private source into a second place.
+- **Pinned images.** A Dockerfile rebuilt later does not give the same image: in a study of 5,298 images rebuilt from unchanged Dockerfiles, none matched the original hash, and only about 72% still built two years later (B.2). So `FROM` lines pin a digest (`hindcast-base:<v>@sha256:…`), and a task records the digest of the image it was checked with. A task whose image no longer builds is marked broken, the same way as a task that fails its checks (6.1); it is not silently rebuilt.
+- **Versions.**
+  - A dataset version is a git tag (`keep-it-simple@v1`). The app commits each change it writes.
+  - Each task also has a `task_version` in `[metadata]`, in Inspect Evals' `N-X` form (B.2). `N` goes up when a change breaks comparison with earlier results: the check, the rubric, the instruction, the environment or the judge model. `X` goes up for changes that keep results comparable, such as a renamed env var. Results with different `N` are never put in one comparison.
+- **Canary.** Every `instruction.md`, `judge.toml` and `solve.sh` carries one line with the repo's canary GUID, following Terminal-Bench (B.2). If a model later reproduces the GUID, the benchmark has leaked into training data. OpenAI dropped SWE-bench Verified over contamination and recommends canary strings and private benchmarks (B.2).
+- **Secrets.**
+  - They are redacted (3.1) before anything is written.
+  - The app runs `gitleaks dir` on every task directory before it commits, and fails the export on exit code 1.
+  - A gitleaks pre-commit hook covers commits made by hand. `SKIP=gitleaks` bypasses that hook, so the app's own export gate is the guarantee, not the hook (B.2).
+  - Gitleaks is in maintenance mode (security fixes only). The scan is behind one function, so it can be swapped for another scanner.
+- Nothing is published to Harbor Hub.
 
 ## 7. Technical shape
 
@@ -615,7 +740,7 @@ hindcast-bench/
 | **1. Import** | Schema, both adapters, loader, archive import, incremental scan with prefix check, redaction, git capture, session list and session view, ATIF export | Every Claude Code and Codex session on this machine and in the archive loads with no parse failures. Every export passes Harbor's validator. On the fixtures, token totals equal Harbor's converter totals; on five sampled live sessions they equal the sum of last-line usage per `message.id` over the session and all its subagent files, and are at or below Claude Code's `cost-state` for the same models. The 3.4 fixtures pass. A re-scan changes nothing. |
 | **2. Label** | Episodes, rule pass, `claude -p` pass, review screen | You label 40 episodes before seeing the model's labels: 20 above the threshold and 20 below, picked at random. Targets: outcome agreement ≥75% with Cohen's κ ≥0.6; per-episode friction-type recall and precision ≥70%; 100% of cited `step_id`s exist; the rule pass puts ≥15 of your friction episodes in its top 20. Disagreements are listed. |
 | **3. Distill** | Grouping, typed fix drafts, editor, export, install | The top 3 groups are themes you recognize. A fix drafted from one of them is one you'd keep after editing. |
-| **4. Benchmark** | Spike (6.4), base image, bench repo, reconstructed task builder with nop/oracle/install checks, Harbor runner, judge, result import, comparison view. Replay tasks follow. | The demo in section 9 runs end to end on real data. Every number opens the run behind it. |
+| **4. Benchmark** | Spike (6.4), task candidates (4.4), base image, bench repo, reconstructed task builder with nop/oracle/install checks, Harbor runner, judge, result import, comparison view. Replay tasks follow. | The demo in section 9 runs end to end on real data. Every number opens the run behind it. The 4.4 fixtures pass, and three real long sessions have gone through extract → review → task. |
 
 Phase 4 starts with reconstructed tasks, because they don't depend on recovering old repo state. Replay tasks follow for sessions with a recorded commit: Codex sessions, and Claude Code sessions imported after phase 1 is installed.
 
@@ -664,11 +789,13 @@ The theme is **"keep it simple"**. The real data has 92 corrections such as "no 
 5. Standalone, not built on Session Hub (2026-11-11). Session Hub's archive is an optional import source only.
 6. The distilled output is typed (skill, rule, hook), and the baseline includes your current instructions (2026-11-11).
 7. Rubric judge: RewardKit if the phase-4 spike passes, the host judge otherwise (GitHub issue #3).
-8. Benchmark content lives in a separate private git repo (6.6, GitHub issue #4).
+8. Benchmark content lives in a separate private git repo (6.6, GitHub issue #4), with a `dataset.toml` per dataset, `N-X` task versions, a canary and an export-time secret scan (2026-11-11).
+9. A session becomes benchmark tasks only through reviewed task candidates with evidence and dependencies (4.4, GitHub issue #6) (2026-11-11).
+10. Every score is a RewardKit dimension in a separate-mode verifier, and rubric edits are regraded with `harbor job regrade` (6.4, GitHub issue #3) (2026-11-11).
 
 No open questions block phase 1.
 
-## Appendix: JSON Schemas
+## Appendix A: JSON Schemas
 
 These are the reference forms. Code generates them from Pydantic models, and every object has `additionalProperties: false`.
 
@@ -806,3 +933,120 @@ Code checks:
 ```
 
 Code checks: exactly one verdict per rubric `id`, and no extra ids. The score is computed in code (6.4).
+
+**A6. Task candidates (`task_candidates.v1`)**
+
+The model proposes candidates with local ids (`c1`, `c2`, …). Code gives each one a stable `candidate_id` and revision 1 when it stores the proposal.
+
+```json
+{
+  "type": "object", "additionalProperties": false, "required": ["candidates", "open_questions"],
+  "properties": {
+    "candidates": {"type": "array", "minItems": 1, "maxItems": 20, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "title", "objective", "criteria", "spans", "starting_state", "depends_on", "outcome", "readiness"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^c[0-9]+$"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 120},
+        "objective": {"type": "string", "minLength": 1, "maxLength": 600},
+        "criteria": {"type": "array", "minItems": 1, "maxItems": 12, "items": {
+          "type": "object", "additionalProperties": false, "required": ["text", "evidence"],
+          "properties": {
+            "text": {"type": "string", "minLength": 1, "maxLength": 300},
+            "evidence": {"$ref": "#/$defs/steps"}}}},
+        "spans": {"type": "array", "minItems": 1, "items": {
+          "type": "object", "additionalProperties": false, "required": ["role", "steps"],
+          "properties": {
+            "role": {"enum": ["request", "requirement", "attempt", "correction", "outcome", "solution_hint"]},
+            "steps": {"$ref": "#/$defs/steps"},
+            "note": {"type": "string", "maxLength": 300}}}},
+        "starting_state": {"type": "array", "maxItems": 12, "items": {
+          "type": "object", "additionalProperties": false, "required": ["fact", "status", "evidence"],
+          "properties": {
+            "fact": {"type": "string", "minLength": 1, "maxLength": 300},
+            "status": {"enum": ["known", "unknown"]},
+            "evidence": {"$ref": "#/$defs/steps"}}}},
+        "base_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{7,40}$"},
+        "depends_on": {"type": "array", "items": {
+          "type": "object", "additionalProperties": false, "required": ["candidate", "reason", "evidence"],
+          "properties": {
+            "candidate": {"type": "string", "pattern": "^c[0-9]+$"},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 300},
+            "evidence": {"$ref": "#/$defs/steps"}}}},
+        "outcome": {"type": "object", "additionalProperties": false, "required": ["status", "evidence"],
+          "properties": {
+            "status": {"enum": ["claimed_done", "accepted", "abandoned", "unclear"]},
+            "evidence": {"$ref": "#/$defs/steps"}}},
+        "readiness": {"enum": ["needs_review", "blocked"]},
+        "blocking_reasons": {"type": "array", "items": {"type": "string", "maxLength": 200}, "maxItems": 5}
+      }}},
+    "open_questions": {"type": "array", "items": {"type": "string", "maxLength": 300}, "maxItems": 10}
+  },
+  "$defs": {"steps": {"type": "array", "minItems": 1, "maxItems": 20, "items": {
+    "type": "object", "additionalProperties": false, "required": ["trajectory_id", "from_step", "to_step"],
+    "properties": {
+      "trajectory_id": {"type": "string"},
+      "from_step": {"type": "integer", "minimum": 1},
+      "to_step": {"type": "integer", "minimum": 1}}}}}
+}
+```
+
+Code checks (4.4):
+- Every range exists in the named trajectory, and `from_step ≤ to_step`.
+- Each `depends_on.candidate` names another candidate in the same proposal.
+- There are no cycles.
+- `solution_hint` ranges do not overlap `request` or `requirement` ranges.
+- A `base_commit` agrees with the trajectory's `git_commit`.
+
+The model can only propose `needs_review` or `blocked`. Only a person sets `ready_for_task_build`.
+
+## Appendix B: Research behind draft 5
+
+A research pass on 2026-11-11 covered GitHub issues #3, #4 and #6. It searched along five angles, fetched 24 sources and extracted 109 claims. Each of 25 central claims went to three adversarial verifiers, and a claim was dropped when two of the three refuted it. 23 were confirmed and 2 were dropped. Where a source on this machine could settle a question, it was checked directly: Harbor 0.25.0 (installed with `uv tool`) and the `harbor-rewardkit` 0.2.4 wheel from PyPI. Below, **verified** means confirmed by vote or by reading the source. **Reported** means extracted from a primary source but not voted on. These are background, not checked facts.
+
+### B.1 RewardKit and the Harbor verifier (#3)
+
+| Spec assumption (draft 4) | Finding | Status |
+|---|---|---|
+| `uvx --from 'harbor-rewardkit==0.2.*' rewardkit /tests` | Works; the tutorial adds `--python '>=3.12,<3.14'`. The CLI's default `--workspace` is `/app` and its default `--output` is `/logs/verifier/reward.json`. | verified (docs, source) |
+| `samples = 3` | `[judge] samples` (≥1, default 1) runs the judge N times, takes the median per criterion and writes agreement to `reward-details.json`. | verified |
+| `guard = "flag"` | `guard` is `off` (default), `flag` or `penalize`; it detects prompt injection in graded files. | verified |
+| `REWARDKIT_FORCE_SUBSCRIPTION=1` | Exists in 0.2.4. `CLAUDE_CODE_OAUTH_TOKEN` is sent as a bearer token; `ANTHROPIC_API_KEY` wins unless this is set. It applies to the Codex judge too. When it was added before 0.2.4 is unknown. | verified (source) |
+| `tests/judge/rubric.toml` | Any `*.toml` with `[judge]` or `[[criterion]]` is a judge, and the score is keyed by its directory name (`judge`), not `rubric`. | verified (source) |
+| RewardKit "adds" to `reward.json` | False. It writes the whole file, so scores written earlier by `test.sh` are lost. Per-criterion detail goes to `reward-details.json`. | verified (source) |
+| The judge reads `diff.patch` | There is no diff input. The judge reads `files`, `reference` and `atif-trajectory`. | verified |
+| Regrade with `harbor run --diff <job>` | Regrade is `harbor job regrade <job> -p <tasks>` or `harbor trial regrade`. It needs a separate verifier and every input declared as an artifact. `harbor run --diff` exists but only previews reuse, regrade and rerun. | verified (docs, CLI) |
+| Separate verifier mode | A fresh environment. Only declared `artifacts` and `/logs/artifacts/` are copied in; `/logs/agent/` and `/logs/verifier/` only when declared. It is the default of `harbor init --task` in 0.25.0. | verified |
+
+Criterion types are `binary` (default), `likert`, `numeric` and `rubric`, all normalized to 0–1. A criterion can have `id`, `weight`, `negate` and `optional`. `reward.toml` sets weights and aggregation, including `all-pass`. Harbor's tutorial uses binary criteria because a Likert judge rarely gives 1.0. Separately, R2E-Gym found that test-based and LLM-judge verifiers each plateau on their own and do better together (reported). This supports keeping both `check` and `judge`.
+
+Sources: [RewardKit judge criteria](https://docs.harborframework.com/rewardkit/judge-criteria) · [Create a verifier with RewardKit](https://docs.harborframework.com/tutorials/create-a-verifier-with-rewardkit) · [RewardKit quick start](https://docs.harborframework.com/rewardkit/quick-start) · [Separate verifier](https://docs.harborframework.com/tasks/separate-verifier) · [Regrade](https://docs.harborframework.com/core-concepts/jobs/regrade) · [harbor-rewardkit on PyPI](https://pypi.org/project/harbor-rewardkit/) (0.2.0 on 2026-08-22, 0.2.4 on 2026-11-01) · [Harbor changelog](https://github.com/harbor-framework/harbor/blob/main/CHANGELOG.md) (v0.25.0 on 2026-10-25) · [R2E-Gym](https://arxiv.org/abs/2504.07164).
+
+### B.2 Storing the private benchmark (#4)
+
+- **Task layout** (verified). `instruction.md`, `task.toml`, `environment/`, `solution/solve.sh` and `tests/test.sh`. Multi-step tasks add `steps/step-N/`. [Tasks overview](https://docs.harborframework.com/core-concepts/tasks/overview.md)
+- **Dataset formats** (verified in the 0.25.0 source). `dataset.toml` (`DatasetManifest`: `[dataset]` name, version, description, authors, keywords; `[[tasks]]` with `org/name` and a `sha256:` digest; optional `[[files]]`) is managed by `harbor init --dataset`, `add`, `remove`, `sync` and `publish`. The `download` and `datasets` commands describe `registry.json` as "Legacy". `registry.json` itself is still documented (reported): it is an array of `{name, version, description, tasks[{name, path, git_url?, git_commit_id?}], metrics?}`, loaded with `--registry-path`, and the docs advise one entry per name and version pair and pinning remote tasks to full SHAs. [Registries](https://docs.harborframework.com/core-concepts/datasets/registries)
+- **Versioning precedent** (reported). Inspect Evals gives every task an `N-X` version: `N` changes when results stop being comparable (scoring, grader model, dataset, prompts, behavior-changing parameters), and `X` when the interface changes. It starts at `1-A`, never goes down, and every bump has a changelog entry. [Inspect Evals task versioning](https://ukgovernmentbeis.github.io/inspect_evals/contributing/repo/TASK_VERSIONING.html)
+- **Canary** (reported). Terminal-Bench tasks on Harbor Hub carry a harbor-canary GUID. [Example task](https://registry.harborframework.com/tasks/terminal-bench/sanitize-git-repo). OpenAI stopped reporting SWE-bench Verified because of contamination. It recommends canary strings, password-protected releases and privately written benchmarks. [OpenAI](https://openai.com/index/introducing-swe-bench-verified/)
+- **Snapshots and images** (reported).
+  - Rebuilding 5,298 images from unchanged Dockerfiles reproduced none bit-for-bit. About 72% of the builds that succeeded in 2023 still built in late 2025, and pinning best practices helped little. [arXiv 2601.12811](https://arxiv.org/html/2601.12811v1)
+  - SWE-smith shares one environment per repository: about 295 GB for 50k tasks, against an estimated 50–150 TB for one image per task. [arXiv 2504.21798](https://arxiv.org/abs/2504.21798)
+  - Epoch layers SWE-bench images as base → env → instance, which brings all of SWE-bench down from 684 GiB to 67 GiB. It also warns that git history in an image can expose future commits. [Epoch](https://epoch.ai/blog/swebench-docker)
+  - LogicStar rewrote packfiles per instance for the same reason. [LogicStar](https://logicstar.ai/blog/how-we-made-swe-bench-50x-smaller)
+- **Secret scanning** (reported). `gitleaks git` and `gitleaks dir` scan history and directories, and exit 1 on findings. `SKIP=gitleaks` bypasses the pre-commit hook. Allowlists live in `.gitleaks.toml`. Gitleaks is in maintenance mode, and `detect` and `protect` are deprecated since v8.19.0. [gitleaks](https://github.com/gitleaks/gitleaks)
+
+### B.3 Splitting sessions into tasks (#6)
+
+- **ATIF** (verified). Current version v1.8 (the RFC is dated April 2026). Harbor's model accepts v1.0–v1.8. A step needs `step_id` (sequential, from 1), `source` and `message`.
+  - **Links that exist:** `tool_call_id`→`source_call_id`; subagents either embedded in `subagent_trajectories` (each with a unique `trajectory_id`, since v1.7) or referenced through `observation.results[].subagent_trajectory_ref` by `trajectory_id` or `trajectory_path`; `continued_trajectory_ref`; a shared `session_id`.
+  - **Missing:** a link from one step to another, and any dependency field. `extra` exists at every level, and `is_copied_context` marks copied steps.
+
+  [ATIF RFC](https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format.md) · [ATIF docs](https://docs.harborframework.com/agents/atif)
+- **Bundled tasks fail** (reported). SWE-bench Verified had three engineers review each of 1,699 problems and kept 500. A February 2026 audit found that at least 59.4% of the audited hard tasks had flawed tests: 35.5% were too narrow and 18.8% tested things the description did not ask for. In `sympy__sympy-18199`, one PR fixed three issues, and the task described only one of them. [OpenAI](https://openai.com/index/introducing-swe-bench-verified/)
+- **Task text written from the solution** (reported). SWE-smith has an LM write the issue text from the diff and a failing test. R2E-Gym back-translates commits into problem statements. Both derive requirements from the solution, which is the leakage risk 4.4 avoids. SWE-rebench links issues to the PRs that fixed them, keeps a task only if it fails before the fix and passes after, has a model rate clarity, and flags contamination by issue date. Only 31% of its repositories got a working automated setup. [SWE-smith](https://arxiv.org/abs/2504.21798) · [R2E-Gym](https://arxiv.org/abs/2504.07164) · [SWE-rebench](https://arxiv.org/abs/2505.20411)
+
+### B.4 Not covered
+
+- Research on topic and intent segmentation of dialogues or coding-agent logs, on noncontiguous task segmentation, and on how reliable structured extraction is did not get through the pass. The design in 4.4 is a proposal, to be measured on the three real sessions.
+- How SWE-bench, Terminal-Bench and tau-bench lay out provenance metadata was not verified.
+- Whether `files`, `optional`, the `[verifier.env]` reference and the `/app` artifact behave as 6.4 assumes is left to the spike.
