@@ -30,7 +30,16 @@ npm run dev                                     # http://localhost:5173
 ## Check
 
 ```sh
-scripts/smoke.sh   # pytest + vite build + live API round trip (if servers are running)
+scripts/smoke.sh   # all checks below + live API round trip (if servers are running)
 ```
+
+Individual checks (CI runs the same ones in `.github/workflows/ci.yml`):
+
+| Area | Lint / format | Types | Tests / build |
+|---|---|---|---|
+| `backend/` | `.venv/bin/ruff check .` · `.venv/bin/ruff format --check .` | `.venv/bin/mypy .` (strict) | `.venv/bin/pytest -q` |
+| `frontend/` | `npm run lint` (ESLint, type-aware) · `npm run format:check` (Prettier) | `npm run typecheck` (`tsc -b`, strict) | `npm run build` |
+
+Config lives in `backend/pyproject.toml`, `frontend/eslint.config.js`, `frontend/tsconfig*.json` and `frontend/.prettierrc.json`. Auto-fix with `ruff check --fix . && ruff format .` and `npm run format`.
 
 Agent workflow rules (testing, commits, PR screenshots) are in `CLAUDE.md`.

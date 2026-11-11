@@ -1,6 +1,6 @@
 # fastapi-react: agent instructions
 
-Notes app: FastAPI + stdlib `sqlite3` in `backend/`, Vite + React in `frontend/`. Vite proxies `/api` to the backend.
+Notes app: FastAPI + stdlib `sqlite3` in `backend/`, Vite + React + TypeScript in `frontend/`. All code is fully typed: Python under `mypy --strict`, TypeScript under `strict`. Don't add `Any`, `# type: ignore`, `as any` or lint disables to get a check to pass. Vite proxies `/api` to the backend.
 
 ## Definition of done
 
@@ -27,7 +27,7 @@ Do all four without asking for each step. **Merge only after explicit human conf
 
 ## Testing
 
-- **Automated:** `scripts/smoke.sh` runs `pytest` (temp DB through `APP_DB`), `vite build`, and a create/list/delete round trip through the proxy on `:5173`. New or changed endpoints get a test in `backend/tests/`.
+- **Automated:** `scripts/smoke.sh` runs backend `ruff check`, `ruff format --check`, `mypy` (strict) and `pytest` (temp DB through `APP_DB`); frontend `eslint`, `prettier --check`, `tsc -b` and `vite build`; and a create/list/delete round trip through the proxy on `:5173`. New or changed endpoints get a test in `backend/tests/`.
 - **Browser:** use the user's existing Chrome. Follow the global browser rule; never launch a new browser. Do the change through the page itself, then confirm the effect in SQLite or through the API. Close every tab you opened.
 - **Report results honestly:** give the actual commands and results. If a step was skipped or failed, say so with the output. Never write just "tested locally".
 
