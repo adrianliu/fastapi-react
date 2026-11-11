@@ -15,7 +15,7 @@ Backend (terminal 1):
 
 ```sh
 cd backend
-uv venv && uv pip install -r requirements.txt   # or: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+uv venv && uv pip install -r requirements-dev.txt
 .venv/bin/fastapi dev main.py                   # http://127.0.0.1:8000  (docs at /docs)
 ```
 
@@ -26,3 +26,11 @@ cd frontend
 npm install
 npm run dev                                     # http://localhost:5173
 ```
+
+## Check
+
+```sh
+scripts/smoke.sh   # pytest + vite build + live API round trip (if servers are running)
+```
+
+Agent workflow rules (testing, commits, PR screenshots) are in `CLAUDE.md`.

@@ -13,3 +13,4 @@ backend/app.db
 # Node
 node_modules/
 dist/
+.pytest_cache/

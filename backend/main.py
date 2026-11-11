@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-DB_PATH = Path(__file__).parent / "app.db"
+DB_PATH = Path(os.environ.get("APP_DB", Path(__file__).parent / "app.db"))
 
 
 def get_db() -> sqlite3.Connection:
