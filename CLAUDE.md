@@ -11,7 +11,7 @@ A change is done when, in this order:
 3. It is committed on a feature branch and pushed.
 4. A PR is open against `main` with a screenshot in the description (see Pull requests).
 
-Do all four without asking for each step. **Never merge.** The user reviews and merges every PR. Never push to `main`.
+Do all four without asking for each step. **Merge only after explicit human confirmation for the specific PR and its current changes.** A request to create or update a PR is not permission to merge it. If new commits are added after confirmation, get confirmation again before merging. Never push directly to `main`.
 
 ## Running the app
 
@@ -73,6 +73,8 @@ What changed and why, as short bullets naming files.
 ```
 
 After creating or editing the PR, run `gh-axi pr view <n> --full` and confirm the body is right.
+
+After human confirmation to merge, check that the PR is open, is not a draft, has no merge conflicts, and has passed all required checks. Do not bypass branch protection or failing checks. Merge through the PR, not by pushing directly to `main`, and verify that GitHub reports the PR as merged.
 
 ## Enforcement
 
