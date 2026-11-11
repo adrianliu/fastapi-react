@@ -3,8 +3,8 @@
 All JSON. Prefix `/api`. Costs are API-price **estimates**.
 
 ## Core (owner: backend-core, `backend/hindcast/api_core.py`)
-- `GET /api/home` → `{sessions: int, trajectories: int, steps: int, harnesses: {[agent_name]: int}, projects: int, first_at: str|null, last_at: str|null, weeks: int, unknown_records: {[agent_name]: int}}`
-- `POST /api/import` → `{job_id: int}` (background; source: `~/.claude/projects`, `~/.session-hub/archive/*.jsonl.gz`, `~/.codex/sessions`)
+- `GET /api/home` → `{sessions: int, trajectories: int, steps: int, harnesses: {[agent_name]: int}, projects: int, first_at: str|null, last_at: str|null, weeks: int, unknown_records: {[agent_name]: int}, import_since: str|null}`
+- `POST /api/import {since?: ISO datetime with offset, all?: bool}` → `{job_id: int}` (background; only files written to at or after `since`, default env `HINDCAST_IMPORT_SINCE`, else all; source: `~/.claude/projects`, `~/.session-hub/archive/*.jsonl.gz`, `~/.codex/sessions`)
 - `GET /api/sessions?q=&harness=&project=&sort=started_at|cost|steps|friction&limit=50&offset=0` → `{total: int, items: SessionSummary[]}`
   - `SessionSummary = {trajectory_id, session_id, agent_name, project_path, model_name, started_at, ended_at, total_steps, total_prompt_tokens, total_completion_tokens, total_cost_usd, n_errors, n_subagents, friction_score: number|null, first_prompt: str}`
 - `GET /api/sessions/{trajectory_id}` → `{summary: SessionSummary, steps: Step[], subagents: SessionSummary[]}`

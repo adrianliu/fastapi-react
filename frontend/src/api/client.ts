@@ -58,7 +58,7 @@ export interface SessionQuery {
 
 export const api = {
   home: () => request<Home>("/home"),
-  importSessions: () => post<JobRef>("/import", {}),
+  importSessions: (sinceHours = 2) => post<JobRef>("/import", { since_hours: sinceHours }),
   sessions: (query: SessionQuery) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {

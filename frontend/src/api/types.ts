@@ -10,6 +10,8 @@ export interface Home {
   last_at: string | null;
   weeks: number;
   unknown_records: Record<string, number>;
+  /** ISO start of the import window (HINDCAST_IMPORT_SINCE), or null for all sessions. */
+  import_since: string | null;
 }
 
 export interface JobRef {

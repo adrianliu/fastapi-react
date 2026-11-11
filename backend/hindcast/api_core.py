@@ -5,9 +5,10 @@ import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
+from pydantic import AwareDatetime, BaseModel
 
 from hindcast.adapters.claude_code import KNOWN_RECORD_TYPES
-from hindcast.adapters.importer import import_all
+from hindcast.adapters.importer import default_since, import_all
 from hindcast.jobs import submit
 from hindcast.store.schema import core_db
 from hindcast.types import JsonObject, JsonValue
@@ -91,12 +92,21 @@ def home() -> JsonObject:
         "last_at": last_at,
         "weeks": weeks,
         "unknown_records": unknown,
+        "import_since": since.isoformat() if (since := default_since()) else None,
     }
 
 
+class ImportRequest(BaseModel):
+    since: AwareDatetime | None = None
+    all: bool = False
+
+
 @router.post("/import")
-def start_import() -> dict[str, int]:
-    return {"job_id": submit("import", lambda progress: import_all(progress))}
+def start_import(body: ImportRequest | None = None) -> dict[str, int]:
+    """Import sessions written to since `since` (default HINDCAST_IMPORT_SINCE, else all)."""
+    req = body or ImportRequest()
+    start = None if req.all else (req.since or default_since())
+    return {"job_id": submit("import", lambda progress: import_all(progress, since=start))}
 
 
 _SORTS = {
