@@ -5,7 +5,7 @@ interface Note {
   text: string;
 }
 
-export default function App() {
+export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([]);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
@@ -52,7 +52,7 @@ export default function App() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui", maxWidth: 480, margin: "40px auto" }}>
+    <main style={{ maxWidth: 480, margin: "40px auto", padding: "0 16px" }}>
       <h1>Notes</h1>
       <form onSubmit={(e) => void addNote(e)}>
         <input
