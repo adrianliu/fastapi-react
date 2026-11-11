@@ -1,0 +1,15 @@
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+
+# Riptide artifacts (cloud-synced)
+.humanlayer/tasks/
+
+# Python
+.venv/
+__pycache__/
+backend/app.db
+
+# Node
+node_modules/
+dist/
