@@ -88,7 +88,9 @@ def run_defs() -> list[RunDef]:
             if len(bits) == 3:
                 out.append(RunDef(name.strip(), Path(bits[0]), bits[1], bits[2]))
         return out
-    return [RunDef(n, r, b, c) for n, r, b, c in DEFAULT_RUNS]
+    from hindcast.bench.offline_eval import discovered_runs
+
+    return [RunDef(n, r, b, c) for n, r, b, c in [*discovered_runs(), *DEFAULT_RUNS]]
 
 
 def get_run(run_id: str) -> RunDef | None:
@@ -212,8 +214,25 @@ def find_trial(trial_id: str) -> Trial | None:
     return None
 
 
+def skill_invoked(trials: list[Trial]) -> tuple[int, int]:
+    """Trials whose trajectory calls the Skill tool (spec 6.5), out of finished trials."""
+    done = [t for t in trials if t.finished]
+    hits = 0
+    for t in done:
+        try:
+            text = (t.path / "agent/trajectory.json").read_text(errors="replace")
+        except OSError:
+            continue
+        if re.search(r'"function_name":\s*"Skill"', text):
+            hits += 1
+    return hits, len(done)
+
+
 def rule_present(trials: list[Trial]) -> str:
-    """Whether /app/CLAUDE.md was loaded as instructions in the agent session."""
+    """Skill invocations if any, else whether /app/CLAUDE.md was loaded as instructions."""
+    hits, n = skill_invoked(trials)
+    if hits:
+        return f"skill invoked {hits}/{n}"
     seen_session = False
     for t in trials:
         for f in glob.glob(str(t.path / "agent/sessions/**/*.jsonl"), recursive=True):
@@ -646,16 +665,5 @@ def launch(baseline_config: str, candidate_config: str) -> str:
                 start_new_session=True,
             )
         )
-    try:
-        from hindcast import jobs as jobs_mod
-
-        submit = getattr(jobs_mod, "submit", None)
-        if callable(submit):
-            res = submit("bench.run", {"pids": [p.pid for p in procs]})
-            if isinstance(res, str):
-                return res
-            if isinstance(res, int):
-                return str(res)
-    except ImportError:
-        pass
+    del procs  # harbor runs detached; progress is read from the job dirs
     return "bench-" + uuid.uuid4().hex[:8]

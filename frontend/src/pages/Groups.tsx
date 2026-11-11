@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { api } from "../api/client.ts";
 import { fmtDate, shortPath } from "../format.ts";
 import { useApi, useJob } from "../hooks.ts";
@@ -48,8 +49,10 @@ export function GroupsPage() {
 export function GroupPage({ id }: { id: number }) {
   const group = useApi(() => api.group(id), [id]);
   const job = useJob();
-  const draft = async () => {
-    const final = await job.start(() => api.draftFix(id));
+  const [kind, setKind] = useState<"rule" | "skill">("skill");
+  const draft = async (fixType: "rule" | "skill") => {
+    setKind(fixType);
+    const final = await job.start(() => api.draftFix(id, fixType));
     const fixId = final?.result?.fix_id;
     if (final?.status === "done" && typeof fixId === "number") {
       go("fixes/" + String(fixId));
@@ -71,11 +74,20 @@ export function GroupPage({ id }: { id: number }) {
                   {g.sessions} sessions × {g.projects} projects · {g.n_items} corrections
                 </div>
               </div>
-              <button className="primary" disabled={job.running} onClick={() => void draft()}>
-                {job.running ? "Drafting…" : "Draft fix"}
-              </button>
+              <div className="row">
+                <button disabled={job.running} onClick={() => void draft("rule")}>
+                  {job.running && kind === "rule" ? "Drafting rule…" : "Draft rule"}
+                </button>
+                <button
+                  className="primary"
+                  disabled={job.running}
+                  onClick={() => void draft("skill")}
+                >
+                  {job.running && kind === "skill" ? "Drafting skill…" : "Draft skill"}
+                </button>
+              </div>
             </header>
-            <JobProgress state={job} label="Draft fix" />
+            <JobProgress state={job} label={kind === "skill" ? "Draft skill" : "Draft rule"} />
             {g.items.length === 0 && <div className="empty">No corrections in this group.</div>}
             <div className="corrections">
               {g.items.map((c) => (

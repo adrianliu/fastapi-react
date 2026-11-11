@@ -5,6 +5,7 @@
 
 import difflib
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -19,6 +20,13 @@ MAX_RULE_LINES = 15
 MAX_EVIDENCE = 12
 DEFAULT_TARGET = "~/.claude/CLAUDE.md"
 PROMPT_VERSION = "fix-rule-1"
+PROMPT_VERSION_SKILL = "fix-skill-1"
+
+
+def _skill_name(raw: str) -> str:
+    name = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    name = re.sub(r"claude|anthropic", "agent", name)[:64].strip("-")
+    return name or "keep-it-simple"
 
 
 class RuleBody(BaseModel):
@@ -28,6 +36,23 @@ class RuleBody(BaseModel):
 class RationaleItem(BaseModel):
     instruction: str
     correction_ids: list[int]
+
+
+class SkillBody(BaseModel):
+    description: str = Field(
+        description="Third person: what the skill does AND when to use it, naming the trigger "
+        "words, tools and situations from the evidence. At most 1024 characters, no XML tags."
+    )
+    body: str = Field(description="Imperative markdown instructions, under 500 lines.")
+
+
+class SkillFixDraft(BaseModel):
+    """Schema A3 restricted to fix_type = skill."""
+
+    name: str = Field(description="kebab-case, 1-64 chars, no 'claude' or 'anthropic'")
+    summary: str
+    skill: SkillBody
+    rationale: list[RationaleItem]
 
 
 class RuleFixDraft(BaseModel):
@@ -71,6 +96,50 @@ def ensure_fix_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
 
 
+SKILL_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+MAX_SKILL_LINES = 500
+
+
+def skill_md(name: str, description: str, body: str) -> str:
+    desc = " ".join(description.split())
+    return f"---\nname: {name}\ndescription: {desc}\n---\n\n{body.strip()}\n"
+
+
+def parse_skill_md(content: str) -> tuple[str, str, str]:
+    """Split SKILL.md into (name, description, body). Raises ValueError on bad frontmatter."""
+    m = re.match(r"^---\n(.*?)\n---\n?(.*)$", content.strip() + "\n", re.S)
+    if not m:
+        raise ValueError("SKILL.md must start with --- frontmatter ---")
+    meta: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        if ":" in line:
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip()
+    return meta.get("name", ""), meta.get("description", ""), m.group(2).strip()
+
+
+def validate_skill(content: str) -> str:
+    """Agent Skills format rules from spec 5.2."""
+    name, description, body = parse_skill_md(content)
+    if not (1 <= len(name) <= 64) or not SKILL_NAME_RE.match(name):
+        raise ValueError("skill name must be 1-64 chars of lowercase letters, digits, hyphens")
+    if "claude" in name or "anthropic" in name:
+        raise ValueError("skill name must not contain 'claude' or 'anthropic'")
+    if not (1 <= len(description) <= 1024):
+        raise ValueError("skill description must be 1-1024 characters")
+    if re.search(r"<[a-zA-Z/][^>]*>", description):
+        raise ValueError("skill description must not contain XML tags")
+    if not body:
+        raise ValueError("skill body is empty")
+    if len(body.splitlines()) >= MAX_SKILL_LINES:
+        raise ValueError(f"skill body must be under {MAX_SKILL_LINES} lines")
+    return skill_md(name, description, body)
+
+
+def validate_content(fix_type: str, content: str) -> str:
+    return validate_skill(content) if fix_type == "skill" else validate_rule(content)
+
+
 def validate_rule(content: str) -> str:
     text = content.strip()
     if not text:
@@ -80,11 +149,13 @@ def validate_rule(content: str) -> str:
     return text
 
 
-def build_prompt(group: dict[str, JsonValue]) -> tuple[str, list[int]]:
+def build_prompt(group: dict[str, JsonValue], fix_type: str = "rule") -> tuple[str, list[int]]:
     items = group.get("items")
     evidence = items[:MAX_EVIDENCE] if isinstance(items, list) else []
     lines = [
-        "You write one short rule for a coding agent's CLAUDE.md file.",
+        "You write one short rule for a coding agent's CLAUDE.md file."
+        if fix_type == "rule"
+        else "You write one Agent Skill (SKILL.md) for a coding agent.",
         "The user corrected the agent repeatedly in the same way. Each correction below shows",
         "what the agent said just before, then the user's reaction.",
         f"Theme: {group.get('name')}. Lesson so far: {group.get('lesson')}",
@@ -101,48 +172,85 @@ def build_prompt(group: dict[str, JsonValue]) -> tuple[str, list[int]]:
         lines.append(f"Agent before: {item.get('agent_before')}")
         lines.append(f"User: {item.get('quote')}")
         lines.append("")
-    lines += [
-        f"Write rule.text as imperative instructions, at most {MAX_RULE_LINES} lines, general",
-        "enough to apply in any project, specific enough to change behaviour. No project names.",
-        "In rationale, map each instruction to the correction ids that motivate it.",
-        "name: a short kebab-case name. summary: one sentence.",
-    ]
+    if fix_type == "skill":
+        lines += [
+            "Write skill.description in the third person: what the skill does and WHEN to use it,",
+            "naming the trigger words, tools and kinds of task seen above. It decides whether the",
+            "skill is invoked at all. Write skill.body as imperative markdown steps (aim for",
+            "20-60 lines): a short procedure plus a checklist. No secrets, no absolute paths,",
+            "no quotes of private session text, no project names.",
+            "In rationale, map each instruction to the correction ids that motivate it.",
+            "name: short kebab-case, must not contain 'claude' or 'anthropic'. summary: one",
+            "sentence.",
+        ]
+    else:
+        lines += [
+            f"Write rule.text as imperative instructions, at most {MAX_RULE_LINES} lines,",
+            "general enough to apply in any project, specific enough to change behaviour.",
+            "No project names.",
+            "In rationale, map each instruction to the correction ids that motivate it.",
+            "name: a short kebab-case name. summary: one sentence.",
+        ]
     return "\n".join(lines), ids
 
 
-def draft_fix(conn: sqlite3.Connection, group_id: int, job_id: int | None = None) -> int:
-    """Call `claude -p` (opus, then sonnet) and store a new rule fix. Raises on failure."""
+def draft_fix(
+    conn: sqlite3.Connection, group_id: int, job_id: int | None = None, fix_type: str = "rule"
+) -> int:
+    """Call `claude -p` (opus, then sonnet) and store a new rule or skill fix. Raises on failure."""
     ensure_fix_schema(conn)
     group = get_group(conn, group_id)
     if group is None:
         raise ValueError(f"group {group_id} not found")
-    prompt, ids = build_prompt(group)
+    prompt, ids = build_prompt(group, fix_type)
     errors: list[str] = []
     for llm_model in ("opus", "sonnet"):
+        draft: RuleFixDraft | SkillFixDraft
         try:
-            result = run_structured(
-                prompt,
-                RuleFixDraft,
-                llm_model=llm_model,
-                purpose="distill",
-                prompt_version=PROMPT_VERSION,
-                job_id=job_id,
-            )
+            if fix_type == "skill":
+                sres = run_structured(
+                    prompt,
+                    SkillFixDraft,
+                    llm_model=llm_model,
+                    purpose="distill",
+                    prompt_version=PROMPT_VERSION_SKILL,
+                    job_id=job_id,
+                )
+                draft, model_used = sres.value, sres.model_used
+                name = _skill_name(draft.name)
+                try:
+                    content = validate_skill(
+                        skill_md(name, draft.skill.description[:1024], draft.skill.body)
+                    )
+                except ValueError as exc:
+                    errors.append(f"{llm_model}: invalid skill: {exc}")
+                    continue
+            else:
+                rres = run_structured(
+                    prompt,
+                    RuleFixDraft,
+                    llm_model=llm_model,
+                    purpose="distill",
+                    prompt_version=PROMPT_VERSION,
+                    job_id=job_id,
+                )
+                draft, model_used = rres.value, rres.model_used
+                name = draft.name
+                content = draft.rule.text.strip()
+                lines = content.splitlines()
+                if len(lines) > MAX_RULE_LINES:
+                    content = "\n".join(lines[:MAX_RULE_LINES])
         except LLMError as exc:
             errors.append(f"{llm_model}: {exc}")
             continue
-        draft = result.value
-        content = draft.rule.text.strip()
-        lines = content.splitlines()
-        if len(lines) > MAX_RULE_LINES:
-            content = "\n".join(lines[:MAX_RULE_LINES])
         now = utc_now()
         cur = conn.execute(
             "INSERT INTO ff_fixes (group_id, fix_type, name, summary, rationale_json, created_at) "
-            "VALUES (?, 'rule', ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 group_id,
-                draft.name,
+                fix_type,
+                name,
                 draft.summary,
                 json.dumps([r.model_dump() for r in draft.rationale]),
                 now,
@@ -153,7 +261,7 @@ def draft_fix(conn: sqlite3.Connection, group_id: int, job_id: int | None = None
         conn.execute(
             "INSERT INTO ff_fix_versions (fix_id, version, content, author, model, created_at) "
             "VALUES (?, 1, ?, 'model', ?, ?)",
-            (fix_id, content, result.model_used or llm_model, now),
+            (fix_id, content, model_used or llm_model, now),
         )
         conn.executemany(
             "INSERT OR IGNORE INTO ff_fix_sources (fix_id, correction_id) VALUES (?, ?)",
@@ -200,7 +308,8 @@ def get_fix(conn: sqlite3.Connection, fix_id: int) -> dict[str, JsonValue] | Non
 
 
 def add_version(conn: sqlite3.Connection, fix_id: int, content: str) -> None:
-    text = validate_rule(content)
+    f = conn.execute("SELECT fix_type FROM ff_fixes WHERE id = ?", (fix_id,)).fetchone()
+    text = validate_content(str(f["fix_type"]) if f else "rule", content)
     row = conn.execute(
         "SELECT COALESCE(MAX(version), 0) AS v FROM ff_fix_versions WHERE fix_id = ?", (fix_id,)
     ).fetchone()

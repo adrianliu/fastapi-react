@@ -15,6 +15,7 @@ import type {
   SessionList,
   Task,
   Trial,
+  EvalStarted,
 } from "./types.ts";
 
 export class ApiError extends Error {
@@ -72,7 +73,10 @@ export const api = {
   buildGroups: () => post<JobRef>("/groups/build", {}),
   groups: () => request<Group[]>("/groups"),
   group: (id: number) => request<Group>("/groups/" + String(id)),
-  draftFix: (groupId: number) => post<JobRef>("/fixes/draft", { group_id: groupId }),
+  draftFix: (groupId: number, fixType: "rule" | "skill" = "rule") =>
+    post<JobRef>("/fixes/draft", { group_id: groupId, fix_type: fixType }),
+  evalFix: (fixId: number, repeats: number) =>
+    post<EvalStarted>("/bench/eval", { fix_id: fixId, repeats }),
   fixes: () => request<Fix[]>("/fixes"),
   fix: (id: number) => request<Fix>("/fixes/" + String(id)),
   saveFix: (id: number, content: string) =>

@@ -3,6 +3,7 @@
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -25,6 +26,7 @@ class JobRef(BaseModel):
 
 class DraftIn(BaseModel):
     group_id: int
+    fix_type: Literal["rule", "skill"] = "rule"
 
 
 class EditIn(BaseModel):
@@ -85,9 +87,9 @@ def draft_fix(body: DraftIn) -> JobRef:
             raise HTTPException(404, "group not found")
 
     def job(progress: Callable[[str], None]) -> JsonObject:
-        progress("drafting rule with claude -p")
+        progress(f"drafting {body.fix_type} with claude -p")
         with core_db() as conn:
-            fix_id = fix_drafts.draft_fix(conn, body.group_id)
+            fix_id = fix_drafts.draft_fix(conn, body.group_id, fix_type=body.fix_type)
         return {"fix_id": fix_id}
 
     return JobRef(job_id=submit("fix_draft", job))
