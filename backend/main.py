@@ -7,6 +7,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+from hindcast.api import ensure_schema, make_router
+
 DB_PATH = Path(os.environ.get("APP_DB", Path(__file__).parent / "app.db"))
 
 
@@ -28,10 +30,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "CREATE TABLE IF NOT EXISTS notes"
             " (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)"
         )
+        ensure_schema(conn)
     yield
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(make_router(get_db))
 
 
 class NoteIn(BaseModel):
