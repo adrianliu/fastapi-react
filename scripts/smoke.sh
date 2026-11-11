@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Run before every commit. Exits non-zero on the first failure.
+#   1. backend lint + format check (ruff), type check (mypy --strict), unit tests (pytest, temp DB)
+#   2. frontend lint (eslint), format check (prettier), type check (tsc) + production build
+#   3. live API check through the Vite proxy (skipped with a warning if the dev servers are not running)
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+echo "==> backend lint, types, tests"
+cd "$ROOT/backend"
+for tool in pytest ruff mypy; do
+  [ -x ".venv/bin/$tool" ] || { uv venv -q 2>/dev/null || true; uv pip install -q -r requirements-dev.txt; break; }
+done
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/mypy .
+.venv/bin/pytest -q
+
+echo "==> frontend lint, types, build"
+cd "$ROOT/frontend"
+[ -x node_modules/.bin/eslint ] || npm install --silent
+npm run lint --silent
+npm run format:check --silent
+npm run build --silent >/dev/null  # runs tsc -b first
+echo "build ok"
+rm -rf dist
+
+echo "==> live API via proxy (http://localhost:5173/api)"
+if curl -sf -o /dev/null http://localhost:5173/api/notes; then
+  id=$(curl -sf -XPOST localhost:5173/api/notes -H 'Content-Type: application/json' -d '{"text":"smoke"}' | jq -r .id)
+  curl -sf localhost:5173/api/notes | jq -e --argjson id "$id" 'any(.id == $id)' >/dev/null
+  code=$(curl -s -o /dev/null -w '%{http_code}' -XDELETE "localhost:5173/api/notes/$id")
+  [ "$code" = 204 ] || { echo "DELETE returned $code"; exit 1; }
+  echo "live API ok (created/listed/deleted note $id)"
+else
+  echo "WARN: dev servers not running; live API check skipped (start them per CLAUDE.md)"
+fi
+echo "==> smoke OK"
