@@ -10,10 +10,22 @@ export interface Home {
   last_at: string | null;
   weeks: number;
   unknown_records: Record<string, number>;
+  /** ISO start of the import window (HINDCAST_IMPORT_SINCE), or null for all sessions. */
+  import_since: string | null;
 }
 
 export interface JobRef {
   job_id: number;
+}
+
+/** POST /api/bench/eval result: an offline eval run started for a fix. */
+export interface EvalStarted {
+  run_id: string;
+  trials: number;
+  fix_path: string;
+  baseline_config: string;
+  candidate_config: string;
+  candidate_dataset: string;
 }
 
 export interface SessionSummary {
@@ -187,13 +199,13 @@ export interface BenchRun {
 export interface VariantStats {
   name: string;
   n_trials: number;
-  check_pass_rate: number;
-  rubric_mean: number;
+  check_pass_rate: number | null;
+  rubric_mean: number | null;
   metrics: Record<string, number>;
-  median_diff_lines: number;
-  cost_usd_mean: number;
-  tokens_mean: number;
-  duration_s_mean: number;
+  median_diff_lines: number | null;
+  cost_usd_mean: number | null;
+  tokens_mean: number | null;
+  duration_s_mean: number | null;
   rule_present: string;
 }
 

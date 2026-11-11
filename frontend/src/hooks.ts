@@ -59,7 +59,10 @@ export function useJob(): JobState {
   const signal = useRef({ cancelled: false });
 
   useEffect(() => {
-    const s = signal.current;
+    // Fresh flag per mount: StrictMode unmounts and remounts once in dev, and a flag
+    // left cancelled by the first unmount would stop every later poll after one check.
+    const s = { cancelled: false };
+    signal.current = s;
     return () => {
       s.cancelled = true;
     };

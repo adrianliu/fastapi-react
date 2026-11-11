@@ -6,9 +6,11 @@ Unchanged files (same size and first-4KB hash) are skipped. Each file is one tra
 import gzip
 import hashlib
 import json
+import os
 import sqlite3
 import time
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 
 from hindcast.adapters import claude_code, codex
@@ -29,7 +31,22 @@ def _slug(path: Path) -> str:
     return str(path).replace("/", "-").replace(".", "-")
 
 
-def discover() -> list[Path]:
+def default_since() -> datetime | None:
+    """Import start from HINDCAST_IMPORT_SINCE (ISO 8601 with offset); unset imports everything."""
+    raw = os.environ.get("HINDCAST_IMPORT_SINCE", "").strip()
+    return datetime.fromisoformat(raw) if raw else None
+
+
+def discover(since: datetime | None = None) -> list[Path]:
+    """Session files, limited to those written to at or after `since` when given."""
+    files = _discover_all()
+    if since is None:
+        return files
+    cutoff = since.timestamp()
+    return [f for f in files if f.stat().st_mtime >= cutoff]
+
+
+def _discover_all() -> list[Path]:
     files: list[Path] = []
     arch = session_hub_archive()
     if arch.is_dir():
@@ -181,10 +198,12 @@ def write_trajectory(conn: sqlite3.Connection, t: TrajectoryRow, origin_path: st
 
 
 def import_all(
-    progress: Callable[[str], None] = lambda _m: None, files: list[Path] | None = None
+    progress: Callable[[str], None] = lambda _m: None,
+    files: list[Path] | None = None,
+    since: datetime | None = None,
 ) -> JsonObject:
     started = time.monotonic()
-    paths = files if files is not None else discover()
+    paths = files if files is not None else discover(since)
     conn = connect()
     ensure_core_schema(conn)
     imported = skipped = empty = 0

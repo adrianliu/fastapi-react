@@ -6,6 +6,7 @@ keyword families. No LLM is used here.
 """
 
 import json
+import os
 import re
 import sqlite3
 from collections.abc import Callable
@@ -18,6 +19,13 @@ Progress = Callable[[str], None]
 QUOTE_CHARS = 400
 AGENT_CHARS = 400
 MIN_SESSIONS = 3
+
+
+def min_sessions() -> int:
+    """Sessions a theme must span to become a group (HINDCAST_GROUP_MIN_SESSIONS, default 3)."""
+    raw = os.environ.get("HINDCAST_GROUP_MIN_SESSIONS", "").strip()
+    return max(1, int(raw)) if raw else MIN_SESSIONS
+
 
 CORRECTION_RE = re.compile(
     r"(^\s*no\b[,.!]?|\bdon'?t\b|\bdo not\b|\bi said\b|\bwhy did you\b|\bstop\b|\bnever\b|"
@@ -295,7 +303,7 @@ def build_groups(conn: sqlite3.Connection, progress: Progress | None = None) -> 
         members = [r for r in rows if theme.pattern.search(str(r["quote"]))]
         sessions = len({r["session_id"] for r in members})
         projects = len({r["project_path"] for r in members if r["project_path"]}) or 1
-        if sessions < MIN_SESSIONS:
+        if sessions < min_sessions():
             continue
         cur = conn.execute(
             "INSERT INTO ff_groups (theme, name, lesson, sessions, projects, score) "

@@ -164,3 +164,24 @@ def test_jobs(client: TestClient) -> None:
     assert j["status"] == "failed"
     assert "ZeroDivisionError" in j["error"]
     assert len(client.get("/api/jobs").json()) == 2
+
+
+def test_discover_since(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    from datetime import UTC, datetime, timedelta
+
+    from hindcast.adapters import importer
+
+    old, new = tmp_path / "old.jsonl", tmp_path / "new.jsonl"
+    old.write_text("{}\n")
+    new.write_text("{}\n")
+    cutoff = datetime.now(UTC) - timedelta(hours=1)
+    before = (cutoff - timedelta(hours=1)).timestamp()
+    os.utime(old, (before, before))
+    monkeypatch.setattr(importer, "_discover_all", lambda: [old, new])
+    assert importer.discover(cutoff) == [new]
+    assert importer.discover(None) == [old, new]
+    monkeypatch.setenv("HINDCAST_IMPORT_SINCE", "2026-11-11T13:00:00-08:00")
+    assert importer.default_since() == datetime.fromisoformat("2026-11-11T21:00:00+00:00")
+    monkeypatch.delenv("HINDCAST_IMPORT_SINCE")
+    assert importer.default_since() is None

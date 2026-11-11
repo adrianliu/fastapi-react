@@ -7,6 +7,11 @@ export default function HomePage() {
   const home = useApi(() => api.home(), []);
   const job = useJob();
 
+  const since = home.data?.import_since ?? null;
+  const sinceLabel = since
+    ? `since ${new Date(since).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}`
+    : "all";
+
   const runImport = async () => {
     await job.start(() => api.importSessions());
     home.reload();
@@ -17,14 +22,14 @@ export default function HomePage() {
       <header className="page-head">
         <h1>Home</h1>
         <button className="primary" disabled={job.running} onClick={() => void runImport()}>
-          {job.running ? "Importing…" : "Import sessions"}
+          {job.running ? "Importing…" : `Import sessions (${sinceLabel})`}
         </button>
       </header>
       <JobProgress state={job} label="Import" />
       <Status
         state={home}
         isEmpty={(h) => h.sessions === 0}
-        empty="No sessions imported yet. Click “Import sessions” to read ~/.claude/projects, the session-hub archive and ~/.codex/sessions."
+        empty="No sessions imported yet. Click “Import sessions” to read ~/.claude/projects, the session-hub archive and ~/.codex/sessions (only sessions active since HINDCAST_IMPORT_SINCE, when it is set)."
       >
         {(h) => (
           <>

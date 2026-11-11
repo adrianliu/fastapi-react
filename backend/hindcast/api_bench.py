@@ -5,9 +5,11 @@ from __future__ import annotations
 import sqlite3
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from hindcast import bench
+from hindcast import bench, fix_drafts
+from hindcast.bench import offline_eval
+from hindcast.store.schema import core_db
 
 router = APIRouter(prefix="/api/bench", tags=["bench"])
 
@@ -61,6 +63,49 @@ def post_run(body: RunIn) -> RunOut:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"could not start harbor: {e}") from e
+
+
+class EvalIn(BaseModel):
+    fix_id: int
+    repeats: int = Field(default=3, ge=1, le=5)
+
+
+class EvalOut(BaseModel):
+    run_id: str
+    trials: int
+    fix_path: str
+    baseline_config: str
+    candidate_config: str
+    candidate_dataset: str
+
+
+@router.post("/eval")
+def post_eval(body: EvalIn) -> EvalOut:
+    """Offline eval of a fix: export it, write both job configs, launch Harbor (spec 6.3)."""
+    with core_db() as conn:
+        fix = fix_drafts.get_fix(conn, body.fix_id)
+        content = fix_drafts.latest_content(conn, body.fix_id)
+    if fix is None or content is None:
+        raise HTTPException(status_code=404, detail="fix not found")
+    versions = fix["versions"]
+    version = len(versions) if isinstance(versions, list) else 1
+    try:
+        plan = offline_eval.plan_eval(
+            str(fix["fix_type"]), str(fix["name"]), version, content, body.repeats
+        )
+        bench.launch(str(plan.baseline_config), str(plan.candidate_config))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"could not start harbor: {e}") from e
+    return EvalOut(
+        run_id=plan.run_id,
+        trials=plan.trials,
+        fix_path=str(plan.fix_path),
+        baseline_config=str(plan.baseline_config),
+        candidate_config=str(plan.candidate_config),
+        candidate_dataset=str(plan.candidate_dataset),
+    )
 
 
 @router.get("/runs")

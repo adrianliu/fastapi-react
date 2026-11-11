@@ -153,3 +153,61 @@ def test_draft_fails_when_cli_fails(client: TestClient, monkeypatch: pytest.Monk
     with core_db() as conn, pytest.raises(RuntimeError, match="cli exploded"):
         fix_drafts.draft_fix(conn, gid)
     assert client.get("/api/fixes").json() == []
+
+
+def test_skill_draft_and_offline_eval(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hindcast import bench
+    from hindcast.bench import offline_eval
+
+    gid = _build(client)
+
+    def fake_run(
+        prompt: str, model: type[fix_drafts.SkillFixDraft], **_: object
+    ) -> Result[fix_drafts.SkillFixDraft]:
+        assert "SKILL.md" in prompt
+        value = fix_drafts.SkillFixDraft(
+            name="Keep It Simple Claude",
+            summary="Prefer the smallest change.",
+            skill=fix_drafts.SkillBody(
+                description="Keeps changes minimal. Use when adding features or fixes.",
+                body="1. Make the smallest change.\n2. Add no flags or config unasked.",
+            ),
+            rationale=[fix_drafts.RationaleItem(instruction="smallest", correction_ids=[1])],
+        )
+        return _fake_result(model, value)
+
+    monkeypatch.setattr(fix_drafts, "run_structured", fake_run)
+    r = client.post("/api/fixes/draft", json={"group_id": gid, "fix_type": "skill"})
+    assert r.status_code == 200
+    wait_idle()
+    fix = client.get("/api/fixes").json()[0]
+    assert fix["fix_type"] == "skill"
+    assert fix["name"] == "keep-it-simple-agent"
+    content = fix["versions"][0]["content"]
+    assert content.startswith("---\nname: keep-it-simple-agent\ndescription: Keeps")
+
+    bad = content.replace("name: keep-it-simple-agent", "name: Bad Name")
+    assert client.put(f"/api/fixes/{fix['id']}", json={"content": bad}).status_code == 422
+    xml = content.replace("description: Keeps", "description: <b>Keeps</b>")
+    assert client.put(f"/api/fixes/{fix['id']}", json={"content": xml}).status_code == 422
+
+    dataset = tmp_path / "ds"
+    (dataset / "task-a/environment").mkdir(parents=True)
+    (dataset / "task-a/task.toml").write_text("[task]\n")
+    monkeypatch.setenv("HINDCAST_BENCH", str(tmp_path / "bench"))
+    monkeypatch.setenv("HINDCAST_EVAL_DATASET", str(dataset))
+    plan = offline_eval.plan_eval("skill", fix["name"], 1, content, 2)
+    assert plan.trials == 4
+    assert (plan.fix_path / "SKILL.md").read_text() == content
+    cand = plan.candidate_config.read_text()
+    assert f'skills: ["{plan.fix_path}"]' in cand
+    assert "skills" not in plan.baseline_config.read_text()
+    assert bench.run_defs()[0].id == plan.run_id
+
+    rule = offline_eval.plan_eval("rule", "be-brief", 2, "- Be brief.", 1)
+    assert rule.candidate_dataset.name == "ds+be-brief@v2"
+    md = rule.candidate_dataset / "task-a/environment/CLAUDE.md"
+    assert md.read_text() == "- Be brief.\n"
+    assert not (dataset / "task-a/environment/CLAUDE.md").exists()

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client.ts";
 import type { Comparison, TaskCell } from "../api/types.ts";
 import { fmtCost, fmtDate, fmtNum, fmtPct } from "../format.ts";
@@ -95,7 +95,8 @@ function ComparisonView({ c }: { c: Comparison }) {
             <td>Check pass rate</td>
             {c.variants.map((v) => (
               <td key={v.name}>
-                {fmtPct(v.check_pass_rate)} <Bar value={v.check_pass_rate} />
+                {fmtPct(v.check_pass_rate)}{" "}
+                {v.check_pass_rate !== null && <Bar value={v.check_pass_rate} />}
               </td>
             ))}
           </tr>
@@ -103,7 +104,8 @@ function ComparisonView({ c }: { c: Comparison }) {
             <td>Rubric mean</td>
             {c.variants.map((v) => (
               <td key={v.name}>
-                {v.rubric_mean.toFixed(2)} <Bar value={v.rubric_mean} />
+                {v.rubric_mean === null ? "—" : v.rubric_mean.toFixed(2)}{" "}
+                {v.rubric_mean !== null && <Bar value={v.rubric_mean} />}
               </td>
             ))}
           </tr>
@@ -122,13 +124,17 @@ function ComparisonView({ c }: { c: Comparison }) {
           <tr>
             <td>Mean tokens</td>
             {c.variants.map((v) => (
-              <td key={v.name}>{fmtNum(Math.round(v.tokens_mean))}</td>
+              <td key={v.name}>
+                {fmtNum(v.tokens_mean === null ? null : Math.round(v.tokens_mean))}
+              </td>
             ))}
           </tr>
           <tr>
             <td>Mean duration</td>
             {c.variants.map((v) => (
-              <td key={v.name}>{v.duration_s_mean.toFixed(0)} s</td>
+              <td key={v.name}>
+                {v.duration_s_mean === null ? "—" : v.duration_s_mean.toFixed(0) + " s"}
+              </td>
             ))}
           </tr>
           <tr>
@@ -229,6 +235,16 @@ function ComparisonView({ c }: { c: Comparison }) {
 export default function ComparisonPage({ run }: { run?: string }) {
   const runs = useApi(() => api.runs(), []);
   const selected = run ?? (runs.data?.[0] ? String(runs.data[0].id) : undefined);
+  const current = runs.data?.find((r) => String(r.id) === selected);
+  const live = selected !== undefined && current?.status !== "done";
+  const reloadRuns = runs.reload;
+  useEffect(() => {
+    if (!live) return;
+    const t = window.setInterval(reloadRuns, 10000);
+    return () => {
+      window.clearInterval(t);
+    };
+  }, [live, reloadRuns]);
   return (
     <div>
       <header className="page-head">
@@ -257,13 +273,29 @@ export default function ComparisonPage({ run }: { run?: string }) {
           </div>
         )
       ) : (
-        <ComparisonLoader run={selected} />
+        <>
+          {live && (
+            <div className="ok-box">
+              Run in progress: Harbor is running the trials in Docker. This page refreshes every 10
+              s; finished trials appear as they complete.
+            </div>
+          )}
+          <ComparisonLoader run={selected} live={live} />
+        </>
       )}
     </div>
   );
 }
 
-function ComparisonLoader({ run }: { run: string }) {
+function ComparisonLoader({ run, live }: { run: string; live: boolean }) {
   const state = useApi(() => api.comparison(run), [run]);
+  const reload = state.reload;
+  useEffect(() => {
+    if (!live) return;
+    const t = window.setInterval(reload, 10000);
+    return () => {
+      window.clearInterval(t);
+    };
+  }, [live, reload]);
   return <Status state={state}>{(c) => <ComparisonView c={c} />}</Status>;
 }

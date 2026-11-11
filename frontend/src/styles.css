@@ -697,3 +697,12 @@ ul.plain li {
 .drawer h2 {
   margin: 0;
 }
+
+.eval-box {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}
+.eval-box h3 {
+  margin: 0 0 4px;
+}
