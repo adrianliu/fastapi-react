@@ -1,65 +1,48 @@
-import os
-import sqlite3
-from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
-from pathlib import Path
+"""Hindcast backend: FastAPI app with core routes plus optional fixes and bench routers."""
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+import importlib
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from types import ModuleType
 
-DB_PATH = Path(os.environ.get("APP_DB", Path(__file__).parent / "app.db"))
+from fastapi import APIRouter, FastAPI
+
+from hindcast import api_core
+from hindcast.store.schema import core_db, ensure_core_schema
+
+log = logging.getLogger("hindcast")
+
+OPTIONAL_MODULES = ("hindcast.api_fixes", "hindcast.api_bench")
 
 
-@contextmanager
-def get_db() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        with conn:
-            yield conn
-    finally:
-        conn.close()
+def _load_optional() -> list[ModuleType]:
+    mods: list[ModuleType] = []
+    for name in OPTIONAL_MODULES:
+        try:
+            mods.append(importlib.import_module(name))
+        except Exception:
+            log.exception("optional module %s not loaded", name)
+    return mods
+
+
+_optional = _load_optional()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    with get_db() as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS notes"
-            " (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)"
-        )
+    with core_db() as conn:
+        ensure_core_schema(conn)
+        for mod in _optional:
+            ensure = getattr(mod, "ensure_schema", None)
+            if callable(ensure):
+                ensure(conn)
     yield
 
 
-app = FastAPI(lifespan=lifespan)
-
-
-class NoteIn(BaseModel):
-    text: str
-
-
-class Note(NoteIn):
-    id: int
-
-
-@app.get("/api/notes")
-def list_notes() -> list[Note]:
-    with get_db() as conn:
-        rows = conn.execute("SELECT id, text FROM notes ORDER BY id").fetchall()
-    return [Note(id=r["id"], text=r["text"]) for r in rows]
-
-
-@app.post("/api/notes", status_code=201)
-def create_note(note: NoteIn) -> Note:
-    with get_db() as conn:
-        cur = conn.execute("INSERT INTO notes (text) VALUES (?)", (note.text,))
-    assert cur.lastrowid is not None
-    return Note(id=cur.lastrowid, text=note.text)
-
-
-@app.delete("/api/notes/{note_id}", status_code=204)
-def delete_note(note_id: int) -> None:
-    with get_db() as conn:
-        cur = conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-    if cur.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Note not found")
+app = FastAPI(title="Hindcast", lifespan=lifespan)
+app.include_router(api_core.router)
+for _mod in _optional:
+    _router = getattr(_mod, "router", None)
+    if isinstance(_router, APIRouter):
+        app.include_router(_router)

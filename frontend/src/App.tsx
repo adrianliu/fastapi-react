@@ -1,77 +1,69 @@
-import { useEffect, useState, type SubmitEvent } from "react";
+import "./styles.css";
+import ComparisonPage from "./pages/Comparison.tsx";
+import { FixesPage, FixPage } from "./pages/Fix.tsx";
+import { GroupPage, GroupsPage } from "./pages/Groups.tsx";
+import HomePage from "./pages/Home.tsx";
+import JobsPage from "./pages/Jobs.tsx";
+import RunPage from "./pages/Run.tsx";
+import SessionPage from "./pages/Session.tsx";
+import SessionsPage from "./pages/Sessions.tsx";
+import TasksPage from "./pages/Tasks.tsx";
+import { useRoute } from "./router.ts";
 
-interface Note {
-  id: number;
-  text: string;
+const NAV: [string, string][] = [
+  ["", "Home"],
+  ["sessions", "Sessions"],
+  ["groups", "Friction groups"],
+  ["fixes", "Fixes"],
+  ["tasks", "Tasks"],
+  ["run", "Run"],
+  ["comparison", "Comparison"],
+  ["jobs", "Jobs"],
+];
+
+function Page({ route }: { route: string[] }) {
+  const [section = "", a, b] = route;
+  switch (section) {
+    case "":
+      return <HomePage />;
+    case "sessions":
+      return a ? <SessionPage key={a} id={a} focusStep={b} /> : <SessionsPage />;
+    case "groups":
+      return a ? <GroupPage key={a} id={Number(a)} /> : <GroupsPage />;
+    case "fixes":
+      return a ? <FixPage key={a} id={Number(a)} /> : <FixesPage />;
+    case "tasks":
+      return <TasksPage />;
+    case "run":
+      return <RunPage />;
+    case "comparison":
+      return <ComparisonPage key={a ?? ""} run={a} />;
+    case "jobs":
+      return <JobsPage />;
+    default:
+      return <div className="empty">Page not found.</div>;
+  }
 }
 
 export default function App() {
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [text, setText] = useState("");
-  const [error, setError] = useState("");
-
-  async function request<T>(url: string, options?: RequestInit): Promise<T> {
-    const res = await fetch(url, options);
-    if (!res.ok) throw new Error("Request failed");
-    return (res.status === 204 ? null : await res.json()) as T;
-  }
-
-  useEffect(() => {
-    request<Note[]>("/api/notes")
-      .then(setNotes)
-      .catch(() => {
-        setError("Could not load notes. Reload to retry.");
-      });
-  }, []);
-
-  async function addNote(e: SubmitEvent<HTMLFormElement>) {
-    e.preventDefault();
-    if (!text.trim()) return;
-    setError("");
-    try {
-      const note = await request<Note>("/api/notes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
-      });
-      setNotes((prev) => [...prev, note]);
-      setText("");
-    } catch {
-      setError("Could not add note. Try again.");
-    }
-  }
-
-  async function deleteNote(id: number) {
-    setError("");
-    try {
-      await request<null>(`/api/notes/${String(id)}`, { method: "DELETE" });
-      setNotes((prev) => prev.filter((n) => n.id !== id));
-    } catch {
-      setError("Could not delete note. Try again.");
-    }
-  }
-
+  const route = useRoute();
+  const section = route[0] ?? "";
   return (
-    <main style={{ fontFamily: "system-ui", maxWidth: 480, margin: "40px auto" }}>
-      <h1>Notes</h1>
-      <form onSubmit={(e) => void addNote(e)}>
-        <input
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-          }}
-          placeholder="New note"
-        />
-        <button type="submit">Add</button>
-      </form>
-      {error && <p role="alert">{error}</p>}
-      <ul>
-        {notes.map((n) => (
-          <li key={n.id}>
-            {n.text} <button onClick={() => void deleteNote(n.id)}>×</button>
-          </li>
+    <div className="shell">
+      <nav className="nav">
+        <a className="brand" href="#/">
+          Hindcast
+        </a>
+        {NAV.map(([path, label]) => (
+          <a key={path} href={"#/" + path} className={section === path ? "active" : ""}>
+            {label}
+          </a>
         ))}
-      </ul>
-    </main>
+        <div className="nav-foot muted small">Costs are API-price est.</div>
+      </nav>
+      <main className="main">
+        <Page route={route} />
+      </main>
+    </div>
   );
 }

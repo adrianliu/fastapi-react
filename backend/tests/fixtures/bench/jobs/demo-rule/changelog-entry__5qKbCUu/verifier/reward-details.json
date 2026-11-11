@@ -1,0 +1,53 @@
+{
+ "judge": {
+  "score": 1.0,
+  "criteria": [
+   {
+    "name": "ticket_marker",
+    "value": 1.0,
+    "raw": "yes",
+    "weight": 1.0,
+    "description": "Every changelog bullet added for version 1.2.0 in diff.patch ends with the marker [ticket: REL-120].",
+    "agreement": 1.0
+   }
+  ],
+  "kind": "agent",
+  "usage": {
+   "input_tokens": 232143,
+   "cache_creation_input_tokens": 17796,
+   "cache_read_input_tokens": 214325,
+   "output_tokens": 3153,
+   "reasoning_output_tokens": 732,
+   "total_tokens": 235296,
+   "cost_usd": 0.00728115,
+   "tool_requests": {
+    "web_search": 0,
+    "web_fetch": 0
+   },
+   "models": {
+    "claude-haiku-5-5": {
+     "input_tokens": 232143,
+     "cache_creation_input_tokens": 17796,
+     "cache_read_input_tokens": 214325,
+     "output_tokens": 3153,
+     "total_tokens": 235296,
+     "context_window_tokens": 1000000,
+     "max_output_tokens": 128000,
+     "tool_requests": {
+      "web_search": 0
+     },
+     "cost_usd": 0.00728115
+    }
+   }
+  },
+  "judge_logs": [
+   "/logs/verifier/trajectory.claude-code.batched-1.d75941d306544c4481e5a0e5beb7450a.jsonl",
+   "/logs/verifier/trajectory.claude-code.batched-1.6020027e5b7d4b5d8608948bebfdce2e.jsonl",
+   "/logs/verifier/trajectory.claude-code.batched-1.46af19ed8bb8418c8ab631e615eb5974.jsonl"
+  ],
+  "guard": {
+   "flagged": false,
+   "reasoning": "The agent's only prose is a short factual summary of the edit it made. It contains no text addressed to the evaluator and nothing about how the work should be scored."
+  }
+ }
+}

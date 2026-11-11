@@ -26,12 +26,10 @@ echo "build ok"
 rm -rf dist
 
 echo "==> live API via proxy (http://localhost:5173/api)"
-if curl -sf -o /dev/null http://localhost:5173/api/notes; then
-  id=$(curl -sf -XPOST localhost:5173/api/notes -H 'Content-Type: application/json' -d '{"text":"smoke"}' | jq -r .id)
-  curl -sf localhost:5173/api/notes | jq -e --argjson id "$id" 'any(.id == $id)' >/dev/null
-  code=$(curl -s -o /dev/null -w '%{http_code}' -XDELETE "localhost:5173/api/notes/$id")
-  [ "$code" = 204 ] || { echo "DELETE returned $code"; exit 1; }
-  echo "live API ok (created/listed/deleted note $id)"
+if curl -sf -o /dev/null http://localhost:5173/api/home; then
+  curl -sf localhost:5173/api/home | jq -e 'has("sessions")' >/dev/null
+  curl -sf 'localhost:5173/api/sessions?limit=1' | jq -e 'has("total") and has("items")' >/dev/null
+  echo "live API ok (/api/home, /api/sessions)"
 else
   echo "WARN: dev servers not running; live API check skipped (start them per CLAUDE.md)"
 fi
