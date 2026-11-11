@@ -1,20 +1,27 @@
 #!/usr/bin/env bash
 # Run before every commit. Exits non-zero on the first failure.
-#   1. backend unit tests (pytest, temp DB)
-#   2. frontend production build
+#   1. backend lint + format check (ruff), type check (mypy --strict), unit tests (pytest, temp DB)
+#   2. frontend lint (eslint), format check (prettier), type check (tsc) + production build
 #   3. live API check through the Vite proxy (skipped with a warning if the dev servers are not running)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "==> backend tests"
+echo "==> backend lint, types, tests"
 cd "$ROOT/backend"
-[ -x .venv/bin/pytest ] || { uv venv -q 2>/dev/null || true; uv pip install -q -r requirements-dev.txt; }
+for tool in pytest ruff mypy; do
+  [ -x ".venv/bin/$tool" ] || { uv venv -q 2>/dev/null || true; uv pip install -q -r requirements-dev.txt; break; }
+done
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/mypy .
 .venv/bin/pytest -q
 
-echo "==> frontend build"
+echo "==> frontend lint, types, build"
 cd "$ROOT/frontend"
-[ -d node_modules ] || npm install --silent
-npm run build --silent >/dev/null
+[ -x node_modules/.bin/eslint ] || npm install --silent
+npm run lint --silent
+npm run format:check --silent
+npm run build --silent >/dev/null  # runs tsc -b first
 echo "build ok"
 rm -rf dist
 
