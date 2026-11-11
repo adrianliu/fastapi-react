@@ -1,4 +1,5 @@
 import importlib
+import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,3 +35,28 @@ def test_delete_missing_returns_404(client):
 
 def test_create_requires_text(client):
     assert client.post("/api/notes", json={}).status_code == 422
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_db_transaction_closes_connection(client, fail):
+    import main
+
+    connections = []
+
+    def insert():
+        with main.get_db() as conn:
+            connections.append(conn)
+            conn.execute("INSERT INTO notes (text) VALUES (?)", ("transaction",))
+            if fail:
+                raise ValueError("rollback")
+
+    if fail:
+        with pytest.raises(ValueError, match="rollback"):
+            insert()
+    else:
+        insert()
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        connections[0].execute("SELECT 1")
+
+    assert len(client.get("/api/notes").json()) == (0 if fail else 1)

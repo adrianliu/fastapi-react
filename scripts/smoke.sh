@@ -14,7 +14,8 @@ cd "$ROOT/backend"
 echo "==> frontend build"
 cd "$ROOT/frontend"
 [ -d node_modules ] || npm install --silent
-npm run build --silent >/dev/null && echo "build ok"
+npm run build --silent >/dev/null
+echo "build ok"
 rm -rf dist
 
 echo "==> live API via proxy (http://localhost:5173/api)"

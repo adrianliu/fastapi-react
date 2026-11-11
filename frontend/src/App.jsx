@@ -3,27 +3,43 @@ import { useEffect, useState } from "react";
 export default function App() {
   const [notes, setNotes] = useState([]);
   const [text, setText] = useState("");
+  const [error, setError] = useState("");
+
+  async function request(url, options) {
+    const res = await fetch(url, options);
+    if (!res.ok) throw new Error("Request failed");
+    return res.status === 204 ? null : res.json();
+  }
 
   useEffect(() => {
-    fetch("/api/notes").then((r) => r.json()).then(setNotes);
+    request("/api/notes").then(setNotes).catch(() => setError("Could not load notes. Reload to retry."));
   }, []);
 
   async function addNote(e) {
     e.preventDefault();
     if (!text.trim()) return;
-    const res = await fetch("/api/notes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
-    const note = await res.json();
-    setNotes((prev) => [...prev, note]);
-    setText("");
+    setError("");
+    try {
+      const note = await request("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      setNotes((prev) => [...prev, note]);
+      setText("");
+    } catch {
+      setError("Could not add note. Try again.");
+    }
   }
 
   async function deleteNote(id) {
-    await fetch(`/api/notes/${id}`, { method: "DELETE" });
-    setNotes((prev) => prev.filter((n) => n.id !== id));
+    setError("");
+    try {
+      await request(`/api/notes/${id}`, { method: "DELETE" });
+      setNotes((prev) => prev.filter((n) => n.id !== id));
+    } catch {
+      setError("Could not delete note. Try again.");
+    }
   }
 
   return (
@@ -33,6 +49,7 @@ export default function App() {
         <input value={text} onChange={(e) => setText(e.target.value)} placeholder="New note" />
         <button type="submit">Add</button>
       </form>
+      {error && <p role="alert">{error}</p>}
       <ul>
         {notes.map((n) => (
           <li key={n.id}>

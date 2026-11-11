@@ -1,6 +1,6 @@
 import os
 import sqlite3
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -9,10 +9,15 @@ from pydantic import BaseModel
 DB_PATH = Path(os.environ.get("APP_DB", Path(__file__).parent / "app.db"))
 
 
-def get_db() -> sqlite3.Connection:
+@contextmanager
+def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 @asynccontextmanager
