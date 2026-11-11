@@ -2,6 +2,8 @@
 
 Minimal notes app: React (Vite) + FastAPI + SQLite.
 
+![Notes app screenshot](docs/screenshot.png)
+
 ```
 backend/   FastAPI app (main.py), SQLite file created at backend/app.db
 frontend/  React app; Vite proxies /api -> http://127.0.0.1:8000
