@@ -228,10 +228,16 @@ def skill_invoked(trials: list[Trial]) -> tuple[int, int]:
     return hits, len(done)
 
 
+def _job_has_skills(job_dir: Path) -> bool:
+    """Whether the job config gave the agent any skills (agents[].skills)."""
+    agents = _obj(_load_json(job_dir / "config.json")).get("agents")
+    return isinstance(agents, list) and any(_obj(a).get("skills") for a in agents)
+
+
 def rule_present(trials: list[Trial]) -> str:
     """Skill invocations if any, else whether /app/CLAUDE.md was loaded as instructions."""
     hits, n = skill_invoked(trials)
-    if hits:
+    if hits or any(_job_has_skills(t.path.parent) for t in trials):
         return f"skill invoked {hits}/{n}"
     seen_session = False
     for t in trials:
