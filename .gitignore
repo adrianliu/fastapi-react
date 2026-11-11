@@ -14,3 +14,7 @@ backend/app.db
 node_modules/
 dist/
 .pytest_cache/
+
+# Secrets
+.env
+.env.*
